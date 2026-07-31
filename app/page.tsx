@@ -21,6 +21,12 @@ import {
   unitById,
   units,
 } from "./urban-model";
+import {
+  buildControlRows,
+  geometrySymbol,
+  type ControlRow,
+  type SpatialSelection,
+} from "./control-matrix";
 
 const levelOrder: CatalogLevel[] = ["region", "unit", "parcel"];
 
@@ -184,17 +190,17 @@ function BaseCity({
   parcels,
   item,
   level,
-  selectedParcel,
-  setSelectedParcel,
+  spatialSelection,
+  selectSpatial,
   showParcels,
   showLandUse,
   showRoadLabels,
 }: {
   parcels: Parcel[];
-  item: CatalogItem;
+  item: CatalogItem | null;
   level: CatalogLevel;
-  selectedParcel: Parcel | null;
-  setSelectedParcel: (parcel: Parcel) => void;
+  spatialSelection: SpatialSelection;
+  selectSpatial: (selection: SpatialSelection) => void;
   showParcels: boolean;
   showLandUse: boolean;
   showRoadLabels: boolean;
@@ -223,15 +229,15 @@ function BaseCity({
 
       {showParcels &&
         parcels.map((parcel) => {
-          const affected = level === "parcel" && isAffectedParcel(parcel, item);
-          const isSelected = selectedParcel?.id === parcel.id;
+          const affected = level === "parcel" && item !== null && isAffectedParcel(parcel, item);
+          const isSelected = spatialSelection.kind === "parcel" && spatialSelection.id === parcel.id;
           return (
             <g
               key={parcel.id}
               className={`parcel-group ${affected ? "affected" : ""} ${
                 isSelected ? "selected" : ""
               }`}
-              onClick={() => setSelectedParcel(parcel)}
+              onClick={() => selectSpatial({ kind: "parcel", id: parcel.id })}
             >
               <rect
                 x={parcel.x}
@@ -273,8 +279,24 @@ function BaseCity({
       </g>
 
       {units.map((unit) => (
-        <g key={`${unit.id}-boundary`} className={`unit-boundary unit-${unit.id}`}>
+        <g
+          key={`${unit.id}-boundary`}
+          className={`unit-boundary unit-${unit.id} ${
+            spatialSelection.kind === "unit" && spatialSelection.id === unit.id ? "selected" : ""
+          }`}
+          onClick={() => selectSpatial({ kind: "unit", id: unit.id })}
+          role="button"
+          aria-label={`选择${unit.name}`}
+        >
           <rect {...unit.bounds} />
+          <rect
+            x={unit.label[0] - 9}
+            y={unit.label[1] - 2.5}
+            width="18"
+            height="5.6"
+            rx=".7"
+            className="unit-label-hit"
+          />
           <text x={unit.label[0]} y={unit.label[1]}>{unit.name}</text>
           <text x={unit.label[0]} y={unit.label[1] + 2.4}>{unit.role} · 120地块</text>
         </g>
@@ -303,6 +325,9 @@ function ElementOverlay({
   const key = profileKeyFor(item);
   const color = groupColor(item.group);
   const levelClass = `overlay-${level}`;
+  const isPoint = item.geometry === "点";
+  const isLine = item.geometry === "线";
+  const isArea = item.geometry === "面";
 
   if (key === "boundary") {
     return (
@@ -326,11 +351,11 @@ function ElementOverlay({
       <g className={`element-overlay axis-overlay ${levelClass}`} style={{ color }}>
         {level === "region" && (
           <>
-            <path d="M 7 60 C 36 58, 79 62, 113 59" className="object-range-line" />
-            <path d="M 7 60 C 36 58, 79 62, 113 59" className="object-center-line" />
-            <circle cx="7" cy="60" r="1.4" />
-            <circle cx="113" cy="59" r="1.4" />
-            <text x="8.5" y="55.8">片区东西发展轴：整体结构 / 影响范围</text>
+            {isArea && <path d="M 7 60 C 36 58, 79 62, 113 59" className="object-range-line" />}
+            {isLine && <path d="M 7 60 C 36 58, 79 62, 113 59" className="object-center-line" />}
+            {isLine && <circle cx="7" cy="60" r="1.4" />}
+            {isLine && <circle cx="113" cy="59" r="1.4" />}
+            <text x="8.5" y={isArea ? 64.5 : 55.8}>{item.id} · {item.name}</text>
           </>
         )}
         {level === "unit" && (
@@ -341,27 +366,27 @@ function ElementOverlay({
               "M 84 60.3 C 95 60, 104 59.5, 113 59",
             ].map((path, index) => (
               <g key={path}>
-                <path d={path} className="object-range-line" />
-                <path d={path} className="object-center-line" />
+                {isArea && <path d={path} className="object-range-line" />}
+                {isLine && <path d={path} className="object-center-line" />}
                 <text x={[12, 52, 95][index]} y={[64.5, 65, 64.2][index]}>
-                  U-{["W", "C", "E"][index]}-AXIS
+                  {item.id}-[{["W", "C", "E"][index]}]
                 </text>
               </g>
             ))}
-            <InterfaceMarker x={36} y={59.5} label="IF-EW-01" />
-            <InterfaceMarker x={84} y={60.3} label="IF-EW-02" />
+            {isLine && <InterfaceMarker x={36} y={59.5} label="IF-EW-01" />}
+            {isLine && <InterfaceMarker x={84} y={60.3} label="IF-EW-02" />}
           </>
         )}
         {level === "parcel" && (
           <>
-            <path d="M 38 55.7 H 82" className="parcel-control-line" />
-            <path d="M 38 64.2 H 82" className="parcel-interface-line" />
-            {[43, 48, 54, 66, 72, 77].map((x) => (
+            {isLine && <path d="M 38 55.7 H 82" className="parcel-control-line" />}
+            {isLine && <path d="M 38 64.2 H 82" className="parcel-interface-line" />}
+            {isLine && [43, 48, 54, 66, 72, 77].map((x) => (
               <line key={x} x1={x} y1="54.8" x2={x} y2="65.2" className="parcel-link" />
             ))}
-            <polygon points="60,48 58.6,51 61.4,51" className="high-point" />
-            <rect x="54" y="55" width="12" height="10" rx="1" className="parcel-open-space" />
-            <text x="38" y="52.8">控制线 · 连续界面 · 高点 · 开放空间 · 慢行接口</text>
+            {isPoint && <polygon points="60,48 58.6,51 61.4,51" className="high-point" />}
+            {isArea && <rect x="54" y="55" width="12" height="10" rx="1" className="parcel-open-space" />}
+            <text x="38" y="52.8">{item.id} · {item.name}</text>
           </>
         )}
       </g>
@@ -380,33 +405,33 @@ function ElementOverlay({
       <g className={`element-overlay node-overlay ${levelClass}`} style={{ color }}>
         {level === "region" && (
           <>
-            <rect x="40" y="40" width="40" height="40" rx="7" className="object-area" />
+            {isArea && <rect x="40" y="40" width="40" height="40" rx="7" className="object-area" />}
             {points.map(([x, y], index) => (
               <g key={`${x}-${y}`}>
-                <circle cx={x} cy={y} r={index === 0 ? 8 : 5.2} className="object-range" />
-                <circle cx={x} cy={y} r="1.15" />
+                {isArea && <circle cx={x} cy={y} r={index === 0 ? 8 : 5.2} className="object-range" />}
+                {isPoint && <circle cx={x} cy={y} r="1.15" />}
               </g>
             ))}
-            <text x="42" y="38">核心—中心—公共空间节点网络</text>
+            <text x="42" y="38">{item.id} · {item.name}</text>
           </>
         )}
         {level === "unit" &&
           points.map(([x, y], index) => (
             <g key={`${x}-${y}`}>
-              <circle cx={x} cy={y} r={index === 0 ? 6 : 4.3} className="object-range" />
-              <circle cx={x} cy={y} r="1" />
-              <text x={x + 1.8} y={y - 1.6}>U-{index + 1} 点+范围</text>
+              {isArea && <circle cx={x} cy={y} r={index === 0 ? 6 : 4.3} className="object-range" />}
+              {isPoint && <circle cx={x} cy={y} r="1" />}
+              <text x={x + 1.8} y={y - 1.6}>{item.id}-{index + 1}</text>
             </g>
           ))}
         {level === "parcel" && (
           <>
-            <rect x="53.5" y="53.5" width="13" height="13" rx="1.2" className="parcel-open-space" />
-            <circle cx="60" cy="60" r="1.35" />
-            {[54, 60, 66].map((x) => (
+            {isArea && <rect x="53.5" y="53.5" width="13" height="13" rx="1.2" className="parcel-open-space" />}
+            {isPoint && <circle cx="60" cy="60" r="1.35" />}
+            {isPoint && [54, 60, 66].map((x) => (
               <circle key={x} cx={x} cy="67.2" r="0.7" className="parcel-entrance" />
             ))}
-            <path d="M 48 60 H 72 M 60 48 V 72" className="parcel-link" />
-            <text x="52" y="50.5">边界 / 面积 / 首层开放 / 出入口 / 连接通道</text>
+            {isLine && <path d="M 48 60 H 72 M 60 48 V 72" className="parcel-link" />}
+            <text x="52" y="50.5">{item.id} · {item.name}</text>
           </>
         )}
       </g>
@@ -437,16 +462,16 @@ function ElementOverlay({
   if (key === "ring") {
     return (
       <g className={`element-overlay green-overlay ${levelClass}`} style={{ color }}>
-        <rect
+        {isArea && <rect
           x={level === "region" ? 34 : 37}
           y={level === "region" ? 34 : 37}
           width={level === "region" ? 52 : 46}
           height={level === "region" ? 52 : 46}
           rx="10"
           className="object-range-line"
-        />
-        <rect x="39" y="39" width="42" height="42" rx="8" className="object-center-line" />
-        {level !== "region" && (
+        />}
+        {isLine && <rect x="39" y="39" width="42" height="42" rx="8" className="object-center-line" />}
+        {level !== "region" && isLine && (
           <>
             <InterfaceMarker x={60} y={39} label="IF-GR-01" />
             <InterfaceMarker x={81} y={60} label="IF-GR-02" />
@@ -454,10 +479,10 @@ function ElementOverlay({
         )}
         {level === "parcel" && (
           <>
-            {[46, 60, 74].map((x) => (
+            {isPoint && [46, 60, 74].map((x) => (
               <circle key={x} cx={x} cy="39" r="0.72" className="parcel-entrance" />
             ))}
-            <text x="40" y="35.5">绿道线位 + 有效宽度 + 出入口 + 接口</text>
+            <text x="40" y="35.5">{item.id} · {item.name}</text>
           </>
         )}
       </g>
@@ -467,9 +492,9 @@ function ElementOverlay({
   if (key === "corridor") {
     return (
       <g className={`element-overlay green-overlay ${levelClass}`} style={{ color }}>
-        <path d="M 31 6 C 31 39, 42 72, 57 114" className="object-range-line corridor-range" />
-        <path d="M 31 6 C 31 39, 42 72, 57 114" className="object-center-line" />
-        {level !== "region" && (
+        {isArea && <path d="M 31 6 C 31 39, 42 72, 57 114" className="object-range-line corridor-range" />}
+        {isLine && <path d="M 31 6 C 31 39, 42 72, 57 114" className="object-center-line" />}
+        {level !== "region" && isLine && (
           <>
             <InterfaceMarker x={38} y={36} label="IF-EC-01" />
             <InterfaceMarker x={50} y={84} label="IF-EC-02" />
@@ -477,8 +502,8 @@ function ElementOverlay({
         )}
         {level === "parcel" && (
           <>
-            <path d="M 35 43 C 38 57, 44 74, 51 92" className="parcel-control-line" />
-            <text x="25" y="41">缓冲面 / 退让线 / 蓝绿连续 / 公共可达</text>
+            {isLine && <path d="M 35 43 C 38 57, 44 74, 51 92" className="parcel-control-line" />}
+            <text x="25" y="41">{item.id} · {item.name}</text>
           </>
         )}
       </g>
@@ -488,7 +513,7 @@ function ElementOverlay({
   if (key === "character" || key === "color") {
     return (
       <g className={`element-overlay district-overlay ${levelClass}`} style={{ color }}>
-        {[
+        {isArea && [
           { x: 6, y: 37, width: 29, height: 46, label: key === "color" ? "暖灰主色区" : "历史风貌协调区" },
           { x: 37, y: 37, width: 46, height: 46, label: key === "color" ? "中明度核心区" : "现代核心风貌区" },
           { x: 85, y: 37, width: 29, height: 46, label: key === "color" ? "科技冷灰区" : "创新产业风貌区" },
@@ -500,9 +525,9 @@ function ElementOverlay({
         ))}
         {level === "parcel" && (
           <>
-            <path d="M 7 54 H 35" className="parcel-interface-line" />
-            <path d="M 37 54 H 83" className="parcel-control-line" />
-            <text x="8" y="51">重点界面：屋顶 / 立面 / 材质 / 色卡 / 正负面</text>
+            {isLine && <path d="M 7 54 H 35" className="parcel-interface-line" />}
+            {isLine && <path d="M 37 54 H 83" className="parcel-control-line" />}
+            <text x="8" y="51">{item.id} · {item.name}</text>
           </>
         )}
       </g>
@@ -512,16 +537,15 @@ function ElementOverlay({
   if (key === "view") {
     return (
       <g className={`element-overlay view-overlay ${levelClass}`} style={{ color }}>
-        <polygon points="14,102 77,27 91,32" className="object-area" />
-        <path d="M 14 102 L 84 29" className="object-center-line" />
-        <circle cx="14" cy="102" r="1.5" />
-        <polygon points="84,24 81.5,31 86.5,31" className="landmark-point" />
-        <text x="16" y="105">VP-01 +45.00m</text>
-        <text x="78" y="22">景观标志点</text>
+        {isArea && <polygon points="14,102 77,27 91,32" className="object-area" />}
+        {isLine && <path d="M 14 102 L 84 29" className="object-center-line" />}
+        {isPoint && <circle cx="14" cy="102" r="1.5" />}
+        {isPoint && <polygon points="84,24 81.5,31 86.5,31" className="landmark-point" />}
+        <text x="16" y="105">{item.id} · {item.name}</text>
         {level === "parcel" && (
           <>
-            <path d="M 37 82 L 74 43" className="parcel-control-line" />
-            <text x="40" y="78">高度包络 / 视线退让 / 第五立面</text>
+            {isLine && <path d="M 37 82 L 74 43" className="parcel-control-line" />}
+            <text x="40" y="78">{item.id} · {item.name}</text>
           </>
         )}
       </g>
@@ -584,18 +608,20 @@ function ParcelFigure({ item }: { item: CatalogItem }) {
 function ProfessionalMap({
   parcels,
   item,
+  items,
   level,
-  selectedParcel,
-  setSelectedParcel,
+  spatialSelection,
+  selectSpatial,
   showParcels,
   showLandUse,
   showRoadLabels,
 }: {
   parcels: Parcel[];
-  item: CatalogItem;
+  item: CatalogItem | null;
+  items: CatalogItem[];
   level: CatalogLevel;
-  selectedParcel: Parcel | null;
-  setSelectedParcel: (parcel: Parcel) => void;
+  spatialSelection: SpatialSelection;
+  selectSpatial: (selection: SpatialSelection) => void;
   showParcels: boolean;
   showLandUse: boolean;
   showRoadLabels: boolean;
@@ -619,18 +645,67 @@ function ProfessionalMap({
           parcels={parcels}
           item={item}
           level={level}
-          selectedParcel={selectedParcel}
-          setSelectedParcel={setSelectedParcel}
+          spatialSelection={spatialSelection}
+          selectSpatial={selectSpatial}
           showParcels={showParcels}
           showLandUse={showLandUse}
           showRoadLabels={showRoadLabels}
         />
-        <ElementOverlay item={item} level={level} />
-        {level === "parcel" && <ParcelFigure item={item} />}
-        <rect x="4" y="4" width="112" height="112" rx="1" className="map-outline" />
+        <g className={`catalog-overview ${item ? "has-highlight" : ""}`} aria-label={`${items.length}项管控要素总览`}>
+          {items.map((catalogItem) => (
+            <g
+              key={catalogItem.id}
+              data-element-id={catalogItem.id}
+              className={`catalog-layer ${
+                item === null
+                  ? "is-overview"
+                  : item.id === catalogItem.id
+                    ? "is-highlighted"
+                    : "is-muted"
+              }`}
+            >
+              <ElementOverlay item={catalogItem} level={level} />
+            </g>
+          ))}
+        </g>
+        {level === "parcel" && item && <ParcelFigure item={item} />}
+        <rect
+          x="4"
+          y="4"
+          width="112"
+          height="112"
+          rx="1"
+          className={`map-outline ${spatialSelection.kind === "region" ? "selected" : ""}`}
+          onClick={() => selectSpatial({ kind: "region", id: "REGION-01" })}
+          role="button"
+          aria-label="选择假想城市设计片区"
+        />
+        <g
+          className={`region-label ${spatialSelection.kind === "region" ? "selected" : ""}`}
+          onClick={() => selectSpatial({ kind: "region", id: "REGION-01" })}
+          role="button"
+          aria-label="选择片区UD-01"
+        >
+          <rect x="91" y="7" width="21" height="5.5" rx=".6" />
+          <text x="101.5" y="10.5">片区 UD-01</text>
+        </g>
+        <g className="drawing-index" aria-hidden="true">
+          {[20, 40, 60, 80, 100].map((value, index) => (
+            <g key={value}>
+              <text x={value} y="3">{String.fromCharCode(65 + index)}</text>
+              <text x="2.3" y={value}>{index + 1}</text>
+            </g>
+          ))}
+        </g>
       </svg>
       <div className="map-north" aria-hidden="true"><b>N</b><i /></div>
       <div className="map-scale" aria-label="比例尺"><span /><small>0</small><small>500m</small><small>1km</small></div>
+      <div className="map-titleblock">
+        <b>{levelMeta[level].name}层城市设计管控图</b>
+        <span>图号 UD-{level === "region" ? "R" : level === "unit" ? "U" : "P"}-01</span>
+        <span>示意比例 1:{level === "region" ? "5000" : level === "unit" ? "2000" : "1000"}</span>
+        <span>坐标系：MVP LOCAL GRID</span>
+      </div>
     </div>
   );
 }
@@ -639,11 +714,13 @@ function LevelTree({
   level,
   setLevel,
   selectedId,
+  clearSelection,
   selectItem,
 }: {
   level: CatalogLevel;
   setLevel: (level: CatalogLevel) => void;
-  selectedId: string;
+  selectedId: string | null;
+  clearSelection: () => void;
   selectItem: (item: CatalogItem) => void;
 }) {
   const items = elementCatalog[level];
@@ -682,6 +759,11 @@ function LevelTree({
         <span>{levelMeta[level].database}</span>
         <small>{levelMeta[level].scale}</small>
       </div>
+      <button className={`overview-button ${selectedId === null ? "active" : ""}`} onClick={clearSelection}>
+        <span>全要素总览</span>
+        <b>{items.length} / {items.length} 已加载</b>
+        <small>选择单项后增强目标图层，其余图层保留为参照</small>
+      </button>
       <div className="element-groups">
         {Object.entries(groups).map(([group, groupItems]) => (
           <section key={group} className="element-group">
@@ -713,10 +795,33 @@ function Inspector({
   level,
   selectedParcel,
 }: {
-  item: CatalogItem;
+  item: CatalogItem | null;
   level: CatalogLevel;
   selectedParcel: Parcel | null;
 }) {
+  if (item === null) {
+    return (
+      <aside className="inspector-panel overview-inspector">
+        <div className="inspector-kicker"><span>全要素总览 · {levelMeta[level].name}层</span><em>{levelMeta[level].count}项</em></div>
+        <h2>综合管控工作图</h2>
+        <p className="object-id">线控 / 点控 / 指标控制 / 条文控制</p>
+        <div className="scale-role">
+          <b>{levelPrinciples[level].verb}</b>
+          <div><span>{levelPrinciples[level].question}</span><small>{levelPrinciples[level].depth}</small></div>
+        </div>
+        <div className="inspector-section">
+          <span>读图规则</span>
+          <h3>所有对象同时显示，选择后仅增强目标层</h3>
+          <p>刚性对象采用实线，弹性范围采用虚线，引导内容采用点划线，研究候选采用斜线。总览不等于将上层对象直接复制到地块。</p>
+        </div>
+        <div className="inspector-section output-section">
+          <span>对象说明</span>
+          <p>点击左侧要素查看其对象、必备属性、成果深度与传导责任；点击图中片区、单元标签或任一地块，查看对应管理表。</p>
+        </div>
+        <div className="value-warning"><b>数值边界</b><p>本MVP不虚构法定控制值；表内给出控制方式、触发条件和审查方法，定量值留待批准成果接入。</p></div>
+      </aside>
+    );
+  }
   const profile = getChainProfile(item);
   const stage = profile[level];
   const principle = levelPrinciples[level];
@@ -780,6 +885,105 @@ function Inspector({
         <p>本MVP只演示对象、条件和审查链。具体控制值必须来自批准成果、现行导则或经审查确认的研究结论。</p>
       </div>
     </aside>
+  );
+}
+
+function ControlSchedule({
+  level,
+  rows,
+  selectedId,
+  spatialSelection,
+  selectedParcel,
+  selectSpatial,
+  selectItem,
+}: {
+  level: CatalogLevel;
+  rows: ControlRow[];
+  selectedId: string | null;
+  spatialSelection: SpatialSelection;
+  selectedParcel: Parcel | null;
+  selectSpatial: (selection: SpatialSelection) => void;
+  selectItem: (item: CatalogItem) => void;
+}) {
+  const applicableCount = rows.filter((row) => row.status === "适用").length;
+  const objectTitle = spatialSelection.kind === "region"
+    ? "假想城市设计片区 · REGION-01"
+    : spatialSelection.kind === "unit"
+      ? `${unitById[spatialSelection.id].name} · ${unitById[spatialSelection.id].code}-UNIT`
+      : `${selectedParcel?.id ?? spatialSelection.id} · ${selectedParcel ? unitById[selectedParcel.unit].name : "地块"}`;
+
+  return (
+    <section className="control-schedule" aria-label={`${objectTitle}管控要素表`}>
+      <div className="schedule-heading">
+        <div>
+          <span>一图一表 · 对象管理图则</span>
+          <h2>{objectTitle}</h2>
+          <p>{levelMeta[level].name}层字段深度 · 当前适用 {applicableCount} 项 / 全目录 {rows.length} 项</p>
+        </div>
+        <div className="spatial-selector" aria-label="空间对象选择">
+          <button className={spatialSelection.kind === "region" ? "active" : ""} onClick={() => selectSpatial({ kind: "region", id: "REGION-01" })}>片区</button>
+          {units.map((unit) => (
+            <button
+              key={unit.id}
+              className={spatialSelection.kind === "unit" && spatialSelection.id === unit.id ? "active" : ""}
+              onClick={() => selectSpatial({ kind: "unit", id: unit.id })}
+            >
+              {unit.code}单元
+            </button>
+          ))}
+          <span>地块：在图中点选</span>
+        </div>
+      </div>
+      <div className="schedule-legend">
+        <span><i className="rigid-line" />刚性 / 实线</span>
+        <span><i className="elastic-line" />弹性 / 虚线</span>
+        <span><i className="guide-line" />引导 / 点划线</span>
+        <span><i className="research-area" />研究 / 候选斜线</span>
+        <b>点击任一行，在地图中高亮该管控要素</b>
+      </div>
+      <div className="schedule-table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>状态</th>
+              <th>要素编号 / 名称</th>
+              <th>{level === "region" ? "识别依据" : "来源对象"}</th>
+              <th>{level === "parcel" ? "触发关系" : "传导处置"}</th>
+              <th>控制性质</th>
+              <th>具体管控方式</th>
+              <th>图面表达</th>
+              <th>审查方法</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => {
+              const catalogItem = elementCatalog[level].find((entry) => entry.id === row.id)!;
+              return (
+                <tr
+                  key={row.id}
+                  className={`${row.status === "不适用" ? "not-applicable" : ""} ${selectedId === row.id ? "selected" : ""}`}
+                  onClick={() => selectItem(catalogItem)}
+                  tabIndex={0}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") selectItem(catalogItem);
+                  }}
+                >
+                  <td><span className={`status-chip ${row.status === "适用" ? "ok" : "na"}`}>{row.status}</span></td>
+                  <td><b>{geometrySymbol(catalogItem.geometry)} {row.id}</b><span>{row.element}</span></td>
+                  <td>{row.source}</td>
+                  <td>{row.relation}</td>
+                  <td><em className={`nature-${row.nature}`}>{row.nature}</em></td>
+                  <td>{row.method}</td>
+                  <td>{row.expression}</td>
+                  <td>{row.review}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <p className="schedule-note">注：不适用项保留在全目录中，用于证明已完成适用性判定；地块要求必须经“空间叠加—规则触发—要求生成—同类合并—冲突复核—图则关联”后生成。</p>
+    </section>
   );
 }
 
@@ -913,29 +1117,43 @@ function QualityGate() {
 export default function Home() {
   const parcels = useMemo(() => generateParcels(), []);
   const [level, setLevel] = useState<CatalogLevel>("unit");
-  const [selectedIds, setSelectedIds] = useState<Record<CatalogLevel, string>>({
-    region: "R-03",
-    unit: "U-03",
-    parcel: "P-15",
+  const [selectedIds, setSelectedIds] = useState<Record<CatalogLevel, string | null>>({
+    region: null,
+    unit: null,
+    parcel: null,
   });
-  const [selectedParcel, setSelectedParcel] = useState<Parcel | null>(null);
+  const [spatialSelection, setSpatialSelection] = useState<SpatialSelection>({ kind: "unit", id: "core" });
   const [showParcels, setShowParcels] = useState(true);
   const [showLandUse, setShowLandUse] = useState(true);
   const [showRoadLabels, setShowRoadLabels] = useState(true);
 
   const items = elementCatalog[level];
-  const selectedItem =
-    items.find((item) => item.id === selectedIds[level]) ?? items[0];
-  const affectedCount = parcels.filter((parcel) => isAffectedParcel(parcel, selectedItem)).length;
+  const selectedItem = items.find((item) => item.id === selectedIds[level]) ?? null;
+  const selectedParcel = spatialSelection.kind === "parcel"
+    ? parcels.find((parcel) => parcel.id === spatialSelection.id) ?? null
+    : null;
+  const controlRows = buildControlRows(items, level, spatialSelection, selectedParcel, isAffectedParcel);
+  const affectedCount = selectedItem
+    ? parcels.filter((parcel) => isAffectedParcel(parcel, selectedItem)).length
+    : controlRows.filter((row) => row.status === "适用").length;
 
   function chooseLevel(next: CatalogLevel) {
     setLevel(next);
-    setSelectedParcel(null);
+    setSelectedIds((current) => ({ ...current, [next]: null }));
+    if (next === "region") setSpatialSelection({ kind: "region", id: "REGION-01" });
+    if (next === "unit") setSpatialSelection({ kind: "unit", id: "core" });
+    if (next === "parcel") setSpatialSelection({ kind: "parcel", id: "C-001" });
   }
 
   function selectItem(item: CatalogItem) {
     setSelectedIds((current) => ({ ...current, [level]: item.id }));
-    setSelectedParcel(null);
+  }
+
+  function selectSpatial(selection: SpatialSelection) {
+    setSpatialSelection(selection);
+    const nextLevel: CatalogLevel = selection.kind === "region" ? "region" : selection.kind === "unit" ? "unit" : "parcel";
+    setLevel(nextLevel);
+    setSelectedIds((current) => ({ ...current, [nextLevel]: null }));
   }
 
   return (
@@ -959,23 +1177,24 @@ export default function Home() {
         <div><span>规划单元</span><b>5</b><small>中央核心单元 1 个</small></div>
         <div><span>现行地块</span><b>600</b><small>每单元 120 个</small></div>
         <div><span>标准要素</span><b>20 / 21 / 29</b><small>片区 / 单元 / 地块</small></div>
-        <div><span>当前适用</span><b>{affectedCount}</b><small>基于空间关系动态判定</small></div>
+        <div><span>{selectedItem ? "关联地块" : "适用要素"}</span><b>{affectedCount}</b><small>{selectedItem ? "基于空间关系动态判定" : "对象管理表实时统计"}</small></div>
       </section>
 
       <section className="studio-grid">
         <LevelTree
           level={level}
           setLevel={chooseLevel}
-          selectedId={selectedItem.id}
+          selectedId={selectedItem?.id ?? null}
+          clearSelection={() => setSelectedIds((current) => ({ ...current, [level]: null }))}
           selectItem={selectItem}
         />
 
         <section className="map-panel">
           <div className="map-toolbar">
             <div>
-              <span>{levelMeta[level].name}层工作图</span>
-              <h2>{selectedItem.id} · {selectedItem.name}</h2>
-              <small>{selectedItem.content}</small>
+              <span>{levelMeta[level].name}层规划管理图则</span>
+              <h2>{selectedItem ? `${selectedItem.id} · ${selectedItem.name}` : `全要素总览 · ${items.length}项同时显示`}</h2>
+              <small>{selectedItem ? selectedItem.content : "图层已完整加载；选择任一要素后增强其线型、填充和注记，其余要素保留为上下文参照。"}</small>
             </div>
             <div className="map-toggles" aria-label="地图图层开关">
               <button className={showParcels ? "active" : ""} onClick={() => setShowParcels((value) => !value)}>地块</button>
@@ -987,9 +1206,10 @@ export default function Home() {
           <ProfessionalMap
             parcels={parcels}
             item={selectedItem}
+            items={items}
             level={level}
-            selectedParcel={selectedParcel}
-            setSelectedParcel={setSelectedParcel}
+            spatialSelection={spatialSelection}
+            selectSpatial={selectSpatial}
             showParcels={showParcels}
             showLandUse={showLandUse}
             showRoadLabels={showRoadLabels}
@@ -1009,14 +1229,24 @@ export default function Home() {
                 <i key={name}><b style={{ background: color }} />{name}</i>
               ))}
             </div>
-            <p>彩色控制对象为当前所选要素；斜线地块表示规则适用，不代表复制单元对象。</p>
+            <p>总览显示本层全部标准要素；选中要素以高饱和描边和白色光晕增强，未选图层仍保留。刚性、弹性、引导与研究对象按不同线型表达。</p>
           </div>
         </section>
 
         <Inspector item={selectedItem} level={level} selectedParcel={selectedParcel} />
       </section>
 
-      <ScaleLadder item={selectedItem} level={level} setLevel={chooseLevel} />
+      <ControlSchedule
+        level={level}
+        rows={controlRows}
+        selectedId={selectedItem?.id ?? null}
+        spatialSelection={spatialSelection}
+        selectedParcel={selectedParcel}
+        selectSpatial={selectSpatial}
+        selectItem={selectItem}
+      />
+
+      <ScaleLadder item={selectedItem ?? items[0]} level={level} setLevel={chooseLevel} />
 
       <section className="lower-grid">
         <StrategyLibrary />

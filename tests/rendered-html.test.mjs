@@ -5,13 +5,14 @@ import test from "node:test";
 const root = new URL("../", import.meta.url);
 
 async function sources() {
-  const [catalog, model, page, css] = await Promise.all([
+  const [catalog, model, matrix, page, css] = await Promise.all([
     readFile(new URL("app/catalog-data.ts", root), "utf8"),
     readFile(new URL("app/urban-model.ts", root), "utf8"),
+    readFile(new URL("app/control-matrix.ts", root), "utf8"),
     readFile(new URL("app/page.tsx", root), "utf8"),
     readFile(new URL("app/globals.css", root), "utf8"),
   ]);
-  return { catalog, model, page, css };
+  return { catalog, model, matrix, page, css };
 }
 
 test("keeps the complete 20/21/29 spatial-element catalog", async () => {
@@ -67,4 +68,29 @@ test("exposes the six-part quality gate and stable map symbology", async () => {
   assert.match(css, /\.unit-boundary/);
   assert.match(css, /\.parcel-control-line/);
   assert.match(css, /\.candidate-zone/);
+});
+
+test("keeps all layers visible in overview and highlights exactly the selected layer", async () => {
+  const { page, css } = await sources();
+  assert.match(page, /items\.map\(\(catalogItem\)/);
+  assert.match(page, /data-element-id=\{catalogItem\.id\}/);
+  assert.match(page, /is-overview/);
+  assert.match(page, /is-highlighted/);
+  assert.match(page, /is-muted/);
+  assert.match(page, /全要素总览/);
+  assert.match(css, /\.catalog-layer\.is-overview/);
+  assert.match(css, /\.catalog-layer\.is-highlighted/);
+});
+
+test("provides click selection and scale-specific one-drawing-one-table schedules", async () => {
+  const { page, matrix } = await sources();
+  assert.match(page, /type SpatialSelection/);
+  assert.match(page, /一图一表 · 对象管理图则/);
+  assert.match(page, /具体管控方式/);
+  assert.match(page, /点击任一行，在地图中高亮该管控要素/);
+  assert.match(page, /selectSpatial\(\{ kind: "unit"/);
+  assert.match(page, /selectSpatial\(\{ kind: "parcel"/);
+  assert.match(matrix, /ControlNature = "刚性" \| "弹性" \| "引导" \| "研究"/);
+  assert.match(matrix, /空间叠加 \/ 包含/);
+  assert.match(matrix, /status: "适用" \| "不适用"/);
 });
