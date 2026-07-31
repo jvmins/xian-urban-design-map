@@ -8,13 +8,40 @@ type Level = "region" | "unit" | "parcel";
 
 type Parcel = {
   id: string;
-  ix: number;
-  iy: number;
+  index: number;
   x: number;
   y: number;
   cx: number;
   cy: number;
   unit: UnitId;
+};
+
+type FeatureDefinition = {
+  category: string;
+  color: string;
+  region: {
+    id: string;
+    name: string;
+    geometry: string;
+    status: string;
+    controlNature: string;
+    unitDeepening: string;
+  };
+  unit: {
+    code: string;
+    name: string;
+    mode: string;
+    parcelDeepening: string;
+    interfaceId?: string;
+  };
+  translation: {
+    id: string;
+    relation: string;
+    trigger: string;
+    targets: string[];
+    expression: string;
+    review: string;
+  };
 };
 
 const GRID = 25;
@@ -56,56 +83,148 @@ const unitMeta: Record<
   },
 };
 
-const featureMeta: Record<
-  FeatureId,
-  {
-    name: string;
-    eyebrow: string;
-    geometry: string;
-    color: string;
-    rule: string;
-    result: string;
-  }
-> = {
+const featureMeta: Record<FeatureId, FeatureDefinition> = {
   "urban-core": {
-    name: "片区城市核心",
-    eyebrow: "面对象 · UD-R-CORE-01",
-    geometry: "面",
+    category: "特色空间结构",
     color: "#d8573d",
-    rule: "核心范围与单元叠加，完整继承至中央核心单元。",
-    result: "生成核心功能、高度体量、首层开放与公共空间要求。",
+    region: {
+      id: "R-CORE-01",
+      name: "片区城市核心",
+      geometry: "面",
+      status: "审查确认",
+      controlNature: "弹性",
+      unitDeepening:
+        "明确承接单元、功能关系、公共空间组织及需在单元量化的高度体量事项。",
+    },
+    unit: {
+      code: "CORE",
+      name: "单元核心",
+      mode: "深化细化",
+      parcelDeepening:
+        "向地块传导功能组织、公共空间、高度体量、慢行联系和标志节点。",
+    },
+    translation: {
+      id: "TR-CORE-01",
+      relation: "地块中心点位于单元核心范围",
+      trigger: "空间叠加 = 包含",
+      targets: ["功能组织", "公共空间", "高度体量", "慢行联系"],
+      expression: "地块要求表 + 附加图则控制面",
+      review: "核对地块功能、公共空间和高度体量是否承接单元核心要求。",
+    },
   },
   axis: {
-    name: "东西发展轴",
-    eyebrow: "线 + 影响面 · UD-R-AXIS-01",
-    geometry: "线+面",
-    color: "#e6a344",
-    rule: "跨单元轴线按单元边界分割，保留统一来源编号和连续接口。",
-    result: "生成建筑控制线、连续界面、高度节奏与慢行接口要求。",
+    category: "特色空间结构",
+    color: "#e19a38",
+    region: {
+      id: "R-AXIS-01",
+      name: "片区东西发展轴",
+      geometry: "中心线 + 影响范围",
+      status: "审查确认",
+      controlNature: "弹性",
+      unitDeepening:
+        "按单元形成独立轴线对象，明确起讫节点、连续界面、影响范围及跨单元接口。",
+    },
+    unit: {
+      code: "AXIS",
+      name: "单元轴线及影响范围",
+      mode: "分割继承",
+      interfaceId: "IF-EW-AXIS-01",
+      parcelDeepening:
+        "向地块传导建筑控制线、沿街界面、高度节奏、高点、开放空间和慢行接口。",
+    },
+    translation: {
+      id: "TR-AXIS-01",
+      relation: "地块与单元轴线影响范围相交",
+      trigger: "相交面积 > 0",
+      targets: ["建筑控制线", "连续界面", "高度节奏", "慢行接口"],
+      expression: "地块要求表 + CAD线实体",
+      review: "核对控制线、连续界面及相邻地块接口是否在图则中完整表达。",
+    },
   },
   corridor: {
-    name: "南北生态廊道",
-    eyebrow: "线 + 控制面 · UD-R-COR-01",
-    geometry: "线+面",
+    category: "开放空间体系",
     color: "#4d9671",
-    rule: "廊道中心线及控制范围共同传导，跨界处记录接口。",
-    result: "生成生态退让、连续绿化、公共可达与建设限制要求。",
+    region: {
+      id: "R-COR-01",
+      name: "片区南北生态廊道",
+      geometry: "中心线 + 控制范围",
+      status: "审查确认",
+      controlNature: "刚性",
+      unitDeepening:
+        "分单元落实廊道边界、有效宽度、连续性、断点与跨单元接口。",
+    },
+    unit: {
+      code: "COR",
+      name: "单元生态廊道",
+      mode: "分割继承",
+      interfaceId: "IF-NS-COR-01",
+      parcelDeepening:
+        "向地块传导生态缓冲、建设限制、蓝绿连续、公共可达和接口控制。",
+    },
+    translation: {
+      id: "TR-COR-01",
+      relation: "地块与单元生态廊道控制范围相交",
+      trigger: "相交面积 > 0",
+      targets: ["生态连续空间", "建设退让", "城市绿道", "公共出入口"],
+      expression: "地块要求表 + 控制面/中心线",
+      review: "检查退让边界、廊道有效宽度和跨地块接口是否连续。",
+    },
   },
   nodes: {
-    name: "公共空间节点",
-    eyebrow: "点 + 服务范围 · UD-R-NODE-01",
-    geometry: "点+面",
+    category: "开放空间体系",
     color: "#5f7db4",
-    rule: "节点按服务范围落入单元，并关联范围内地块。",
-    result: "生成公共空间、首层开放、出入口和慢行连接要求。",
+    region: {
+      id: "R-NODE-SYS-01",
+      name: "片区公共空间节点体系",
+      geometry: "节点 + 服务范围",
+      status: "审查确认",
+      controlNature: "引导",
+      unitDeepening:
+        "节点按所在单元深化位置、范围、功能、服务对象及与轴线和廊道的关系。",
+    },
+    unit: {
+      code: "NODE",
+      name: "单元公共空间节点",
+      mode: "深化细化",
+      parcelDeepening:
+        "向地块传导节点位置、边界、面积、功能、可达性、首层开放和连接通道。",
+    },
+    translation: {
+      id: "TR-NODE-01",
+      relation: "地块与单元节点服务范围相交",
+      trigger: "相交或邻接",
+      targets: ["公共空间节点", "首层开放空间", "出入口", "慢行联系"],
+      expression: "地块要求表 + 点/面成组实体",
+      review: "核对节点点位是否位于范围内，出入口与慢行联系是否连续。",
+    },
   },
   control: {
-    name: "重点控制区",
-    eyebrow: "面对象 · UD-R-ZONE-01",
-    geometry: "面",
+    category: "城市设计控制区",
     color: "#9a5c8e",
-    rule: "核心单元被确定为一级重点控制区，类型保持唯一。",
-    result: "地块加载核心区强化规则包，并进入重点审查队列。",
+    region: {
+      id: "R-ZONE-CAND-01",
+      name: "片区重点控制区候选范围",
+      geometry: "候选面",
+      status: "研究成果库",
+      controlNature: "研究建议",
+      unitDeepening:
+        "片区仅提出候选范围、建议级别、唯一重点类型和核心问题；不得直接作为现行管控数据。",
+    },
+    unit: {
+      code: "ZONE",
+      name: "单元一级重点控制区",
+      mode: "确认转化",
+      parcelDeepening:
+        "由单元确认边界、一级控制级别和唯一重点类型，再形成分地块任务。",
+    },
+    translation: {
+      id: "TR-ZONE-01",
+      relation: "地块位于单元重点控制区",
+      trigger: "控制分区 = 重点控制区",
+      targets: ["重要发展区强化规则包", "重点控制附加图则", "重点审查任务"],
+      expression: "控制区属性 + 强化要求 + 附加图则",
+      review: "核对控制级别和重点类型唯一性，不得叠加多个重点类型。",
+    },
   },
 };
 
@@ -117,6 +236,30 @@ const featureOrder: FeatureId[] = [
   "control",
 ];
 
+const stageMeta: Record<
+  Level,
+  { number: string; name: string; database: string; explanation: string }
+> = {
+  region: {
+    number: "01",
+    name: "片区空间对象",
+    database: "片区城市设计.gdb",
+    explanation: "形成完整对象与分单元深化任务，不直接生成地块要求。",
+  },
+  unit: {
+    number: "02",
+    name: "单元空间对象",
+    database: "单元城市设计.gdb",
+    explanation: "逐单元建立新对象，填写来源片区对象编号和传导方式。",
+  },
+  parcel: {
+    number: "03",
+    name: "地块管控要求",
+    database: "地块城市设计.gdb",
+    explanation: "先判定适用性，再通过转译规则生成地块要求和图则对象。",
+  },
+};
+
 function assignUnit(ix: number, iy: number): UnitId {
   if (ix >= 7 && ix <= 17 && iy >= 7 && iy <= 17) return "core";
   const dx = ix - 12;
@@ -125,14 +268,14 @@ function assignUnit(ix: number, iy: number): UnitId {
   return dy > 0 ? "south" : "north";
 }
 
-function matchesFeature(parcel: Parcel, feature: FeatureId) {
+function appliesToParcel(parcel: Parcel, feature: FeatureId) {
   const { cx, cy, unit } = parcel;
   if (feature === "urban-core") {
     return unit === "core" && Math.hypot(cx - 50, cy - 50) < 20;
   }
-  if (feature === "axis") return Math.abs(cy - 50) < 6;
+  if (feature === "axis") return Math.abs(cy - (50 + (cx - 50) * -0.06)) < 6;
   if (feature === "corridor") {
-    return Math.abs(cx - (29 + cy * 0.16)) < 5;
+    return Math.abs(cx - (28 + cy * 0.18)) < 5;
   }
   if (feature === "nodes") {
     return [
@@ -146,8 +289,117 @@ function matchesFeature(parcel: Parcel, feature: FeatureId) {
   return unit === "core";
 }
 
-function formatCount(count: number) {
-  return count.toLocaleString("zh-CN");
+function unitObjectId(feature: FeatureId, unit: UnitId) {
+  return `U-${unitMeta[unit].short}-${featureMeta[feature].unit.code}-01`;
+}
+
+function requirementId(feature: FeatureId, parcel: Parcel) {
+  return `REQ-${featureMeta[feature].unit.code}-${parcel.id}`;
+}
+
+function FeatureGeometry({
+  feature,
+  mode,
+}: {
+  feature: FeatureId;
+  mode: "region" | "unit-context" | "parcel-context";
+}) {
+  const color = featureMeta[feature].color;
+  const modeClass = `geometry-${mode}`;
+
+  if (feature === "urban-core") {
+    return (
+      <rect
+        x="32"
+        y="32"
+        width="36"
+        height="36"
+        rx="4"
+        className={`data-geometry core-geometry ${modeClass}`}
+        style={{ stroke: color }}
+      />
+    );
+  }
+
+  if (feature === "axis") {
+    return (
+      <>
+        <path
+          d="M 4 52 C 28 46, 62 56, 96 48"
+          className={`data-geometry geometry-range axis-range ${modeClass}`}
+          style={{ stroke: color }}
+        />
+        <path
+          d="M 4 52 C 28 46, 62 56, 96 48"
+          className={`data-geometry geometry-line ${modeClass}`}
+          style={{ stroke: color }}
+        />
+      </>
+    );
+  }
+
+  if (feature === "corridor") {
+    return (
+      <>
+        <path
+          d="M 28 2 C 27 34, 36 64, 46 98"
+          className={`data-geometry geometry-range corridor-range ${modeClass}`}
+          style={{ stroke: color }}
+        />
+        <path
+          d="M 28 2 C 27 34, 36 64, 46 98"
+          className={`data-geometry geometry-line ${modeClass}`}
+          style={{ stroke: color }}
+        />
+      </>
+    );
+  }
+
+  if (feature === "nodes") {
+    return (
+      <>
+        {[
+          [50, 50],
+          [50, 20],
+          [80, 50],
+          [50, 80],
+          [20, 50],
+        ].map(([x, y], index) => (
+          <g key={`${x}-${y}`} className={`node-object ${modeClass}`}>
+            <circle
+              cx={x}
+              cy={y}
+              r="5.5"
+              className="node-service-range"
+              style={{ stroke: color }}
+            />
+            <circle
+              cx={x}
+              cy={y}
+              r="1.25"
+              className="node-location"
+              style={{ fill: color }}
+            />
+            <text x={x + 2} y={y - 2}>
+              N{index + 1}
+            </text>
+          </g>
+        ))}
+      </>
+    );
+  }
+
+  return (
+    <rect
+      x="28"
+      y="28"
+      width="44"
+      height="44"
+      rx="2"
+      className={`data-geometry control-candidate ${modeClass}`}
+      style={{ stroke: color }}
+    />
+  );
 }
 
 export default function Home() {
@@ -158,8 +410,7 @@ export default function Home() {
       const unit = assignUnit(ix, iy);
       return {
         id: `${unitMeta[unit].short}-${String(index + 1).padStart(3, "0")}`,
-        ix,
-        iy,
+        index,
         x: ix * CELL,
         y: iy * CELL,
         cx: ix * CELL + CELL / 2,
@@ -170,43 +421,56 @@ export default function Home() {
   }, []);
 
   const [feature, setFeature] = useState<FeatureId>("axis");
-  const [level, setLevel] = useState<Level>("parcel");
+  const [level, setLevel] = useState<Level>("region");
   const [selectedParcel, setSelectedParcel] = useState<Parcel | null>(null);
   const [selectedUnit, setSelectedUnit] = useState<UnitId | null>(null);
 
-  const activeParcels = useMemo(
-    () => parcels.filter((parcel) => matchesFeature(parcel, feature)),
+  const applicableParcels = useMemo(
+    () => parcels.filter((parcel) => appliesToParcel(parcel, feature)),
     [parcels, feature],
   );
-  const activeIds = useMemo(
-    () => new Set(activeParcels.map((parcel) => parcel.id)),
-    [activeParcels],
+  const applicableIds = useMemo(
+    () => new Set(applicableParcels.map((parcel) => parcel.id)),
+    [applicableParcels],
   );
   const affectedUnits = useMemo(
-    () => Array.from(new Set(activeParcels.map((parcel) => parcel.unit))),
-    [activeParcels],
+    () =>
+      (Object.keys(unitMeta) as UnitId[]).filter((unit) =>
+        applicableParcels.some((parcel) => parcel.unit === unit),
+      ),
+    [applicableParcels],
   );
   const unitCounts = useMemo(() => {
-    return Object.keys(unitMeta).reduce(
-      (acc, key) => {
-        const unit = key as UnitId;
+    return (Object.keys(unitMeta) as UnitId[]).reduce(
+      (acc, unit) => {
         acc[unit] = parcels.filter((parcel) => parcel.unit === unit).length;
         return acc;
       },
       {} as Record<UnitId, number>,
     );
   }, [parcels]);
-
   const visibleFeaturesForParcel = selectedParcel
-    ? featureOrder.filter((id) => matchesFeature(selectedParcel, id))
+    ? featureOrder.filter((id) => appliesToParcel(selectedParcel, id))
     : [];
   const meta = featureMeta[feature];
-  const focusUnit = selectedParcel?.unit ?? selectedUnit;
+  const stage = stageMeta[level];
+  const currentUnit =
+    selectedParcel?.unit ??
+    selectedUnit ??
+    (affectedUnits.length === 1 ? affectedUnits[0] : null);
+  const currentUnitAffected =
+    currentUnit !== null && affectedUnits.includes(currentUnit);
 
   function chooseFeature(id: FeatureId) {
     setFeature(id);
     setSelectedParcel(null);
     setSelectedUnit(null);
+    setLevel("region");
+  }
+
+  function chooseLevel(next: Level) {
+    setLevel(next);
+    if (next !== "parcel") setSelectedParcel(null);
   }
 
   function chooseUnit(id: UnitId) {
@@ -221,6 +485,13 @@ export default function Home() {
     setLevel("parcel");
   }
 
+  const stageCount =
+    level === "region"
+      ? 1
+      : level === "unit"
+        ? affectedUnits.length
+        : applicableParcels.length;
+
   return (
     <main className="app-shell">
       <header className="topbar">
@@ -228,23 +499,24 @@ export default function Home() {
           <span className="brand-mark">西安·城市设计</span>
           <span className="brand-divider" />
           <div>
-            <h1>空间传导实验台</h1>
-            <p>片区 → 单元 → 地块 · 假想城市 MVP</p>
+            <h1>空间对象逐级传导实验台</h1>
+            <p>片区对象 → 单元对象 → 适用性判定 → 地块管控要求</p>
           </div>
         </div>
         <div className="topbar-actions">
           <span className="scenario-dot" />
-          <span>场景 01 / 方城原型</span>
+          <span>数据模型 v0.2</span>
+          <span className="no-skip-badge">禁止跨级传导</span>
           <button
             className="reset-button"
             onClick={() => {
               setFeature("axis");
+              setLevel("region");
               setSelectedParcel(null);
               setSelectedUnit(null);
-              setLevel("parcel");
             }}
           >
-            重置视图
+            重置
           </button>
         </div>
       </header>
@@ -252,8 +524,8 @@ export default function Home() {
       <section className="workspace">
         <aside className="left-panel">
           <div className="panel-heading">
-            <span>空间要素</span>
-            <small>{featureOrder.length} 类</small>
+            <span>片区成果对象</span>
+            <small>示例 5 项</small>
           </div>
           <div className="feature-list">
             {featureOrder.map((id, index) => {
@@ -271,31 +543,32 @@ export default function Home() {
                     {String(index + 1).padStart(2, "0")}
                   </span>
                   <span>
-                    <strong>{item.name}</strong>
-                    <small>{item.geometry}对象</small>
+                    <em>{item.category}</em>
+                    <strong>{item.region.name}</strong>
+                    <small>{item.region.geometry}</small>
                   </span>
                 </button>
               );
             })}
           </div>
 
-          <div className="unit-summary">
+          <div className="stage-rail">
             <div className="panel-heading compact">
-              <span>五个规划单元</span>
-              <small>625 地块</small>
+              <span>数据传导阶段</span>
+              <small>不可跳级</small>
             </div>
-            {(Object.keys(unitMeta) as UnitId[]).map((id) => (
+            {(Object.keys(stageMeta) as Level[]).map((id, index) => (
               <button
                 key={id}
-                className={`unit-row ${focusUnit === id ? "active" : ""}`}
-                onClick={() => chooseUnit(id)}
+                className={`stage-rail-item ${level === id ? "active" : ""}`}
+                onClick={() => chooseLevel(id)}
               >
-                <span
-                  className="unit-dot"
-                  style={{ background: unitMeta[id].color }}
-                />
-                <span>{unitMeta[id].name}</span>
-                <b>{unitCounts[id]}</b>
+                <b>{stageMeta[id].number}</b>
+                <span>
+                  <strong>{stageMeta[id].name}</strong>
+                  <small>{stageMeta[id].database}</small>
+                </span>
+                {index < 2 && <i>↓</i>}
               </button>
             ))}
           </div>
@@ -303,50 +576,50 @@ export default function Home() {
           <div className="legend-note">
             <span className="pulse-ring" />
             <p>
-              高亮地块表示当前城市设计要素传导后直接影响的空间对象。
+              同一种颜色不代表同一个对象。每一级都生成独立编号，并在下位对象中记录直接来源。
             </p>
           </div>
         </aside>
 
         <section className="map-stage">
           <div className="map-toolbar">
-            <div className="level-switch" aria-label="空间层级">
-              {(
-                [
-                  ["region", "片区"],
-                  ["unit", "单元"],
-                  ["parcel", "地块"],
-                ] as [Level, string][]
-              ).map(([id, label]) => (
+            <div className="level-switch" aria-label="空间数据层级">
+              {(Object.keys(stageMeta) as Level[]).map((id) => (
                 <button
                   key={id}
                   className={level === id ? "active" : ""}
-                  onClick={() => setLevel(id)}
+                  onClick={() => chooseLevel(id)}
                 >
-                  {label}
+                  {stageMeta[id].number} {id === "parcel" ? "地块" : id === "unit" ? "单元" : "片区"}
                 </button>
               ))}
             </div>
+            <div className="map-stage-title">
+              <span>{stage.name}</span>
+              <small>{stage.explanation}</small>
+            </div>
             <div className="map-metrics">
               <span>
-                影响单元 <b>{affectedUnits.length}</b>
+                本级记录 <b>{stageCount}</b>
               </span>
               <span>
-                命中地块 <b>{formatCount(activeParcels.length)}</b>
+                下位去向 <b>{level === "parcel" ? "图则" : level === "unit" ? applicableParcels.length : affectedUnits.length}</b>
               </span>
             </div>
           </div>
 
           <div className="map-wrap">
             <div className="map-caption">
-              <span>方城规划片区</span>
-              <small>1000 × 1000m · 演示坐标</small>
+              <span>{stage.database}</span>
+              <small>
+                {meta.region.id} · {meta.region.name}
+              </small>
             </div>
             <svg
               className="city-map"
               viewBox="-4 -4 108 108"
               role="img"
-              aria-label="包含五个单元和625个地块的方形假想城市"
+              aria-label="片区、单元和地块三级空间对象逐级传导示意图"
             >
               <defs>
                 <pattern
@@ -362,9 +635,27 @@ export default function Home() {
                     strokeWidth=".12"
                   />
                 </pattern>
-                <filter id="softShadow" x="-30%" y="-30%" width="160%" height="160%">
-                  <feDropShadow dx="0" dy="1" stdDeviation="1.4" floodOpacity=".2" />
-                </filter>
+                <pattern
+                  id="requirementHatch"
+                  width="1.5"
+                  height="1.5"
+                  patternUnits="userSpaceOnUse"
+                  patternTransform="rotate(45)"
+                >
+                  <line
+                    x1="0"
+                    y1="0"
+                    x2="0"
+                    y2="1.5"
+                    stroke={meta.color}
+                    strokeWidth=".35"
+                  />
+                </pattern>
+                {(Object.keys(unitMeta) as UnitId[]).map((id) => (
+                  <clipPath key={id} id={`clip-${id}`}>
+                    <polygon points={unitMeta[id].polygon} />
+                  </clipPath>
+                ))}
               </defs>
 
               <rect
@@ -383,11 +674,10 @@ export default function Home() {
                 fill="url(#minorGrid)"
               />
 
-              {level !== "region" &&
+              {level === "parcel" &&
                 parcels.map((parcel) => {
-                  const active = activeIds.has(parcel.id);
+                  const applicable = applicableIds.has(parcel.id);
                   const selected = selectedParcel?.id === parcel.id;
-                  const unitFocused = selectedUnit === parcel.unit;
                   return (
                     <rect
                       key={parcel.id}
@@ -397,14 +687,13 @@ export default function Home() {
                       height={CELL - 0.48}
                       className={[
                         "parcel",
-                        active ? "affected" : "",
+                        applicable ? "applicable" : "",
                         selected ? "selected" : "",
-                        selectedUnit && !unitFocused ? "muted" : "",
                       ].join(" ")}
                       style={
-                        active
+                        applicable
                           ? {
-                              fill: meta.color,
+                              fill: "url(#requirementHatch)",
                               stroke: meta.color,
                             }
                           : undefined
@@ -419,79 +708,68 @@ export default function Home() {
                   <polygon
                     key={id}
                     points={unitMeta[id].polygon}
-                    className={`unit-fill ${
-                      affectedUnits.includes(id) ? "affected" : ""
-                    } ${focusUnit === id ? "selected" : ""}`}
+                    className={[
+                      "unit-fill",
+                      level === "region" ? "context" : "",
+                      affectedUnits.includes(id) ? "affected" : "",
+                      selectedUnit === id ? "selected" : "",
+                    ].join(" ")}
                     style={{ fill: unitMeta[id].color }}
                     onClick={() => chooseUnit(id)}
                   />
                 ))}
 
-              <g className="urban-elements">
-                <rect
-                  x="32"
-                  y="32"
-                  width="36"
-                  height="36"
-                  rx="4"
-                  className={`feature-zone ${
-                    feature === "urban-core" ? "shown" : ""
-                  }`}
-                  style={{ stroke: featureMeta["urban-core"].color }}
-                />
-                <rect
-                  x="28"
-                  y="28"
-                  width="44"
-                  height="44"
-                  rx="2"
-                  className={`control-zone ${
-                    feature === "control" ? "shown" : ""
-                  }`}
-                  style={{ stroke: featureMeta.control.color }}
-                />
-                <path
-                  d="M 4 52 C 28 46, 62 56, 96 48"
-                  className={`axis-impact ${feature === "axis" ? "shown" : ""}`}
-                  style={{ stroke: featureMeta.axis.color }}
-                />
-                <path
-                  d="M 4 52 C 28 46, 62 56, 96 48"
-                  className={`axis-line ${feature === "axis" ? "shown" : ""}`}
-                />
-                <path
-                  d="M 28 2 C 26 34, 36 62, 46 98"
-                  className={`corridor-impact ${
-                    feature === "corridor" ? "shown" : ""
-                  }`}
-                />
-                <path
-                  d="M 28 2 C 26 34, 36 62, 46 98"
-                  className={`corridor-line ${
-                    feature === "corridor" ? "shown" : ""
-                  }`}
-                />
-                {[
-                  [50, 50],
-                  [50, 20],
-                  [80, 50],
-                  [50, 80],
-                  [20, 50],
-                ].map(([x, y], index) => (
-                  <g
-                    key={`${x}-${y}`}
-                    className={`public-node ${
-                      feature === "nodes" ? "shown" : ""
-                    }`}
-                  >
-                    <circle cx={x} cy={y} r="5.5" className="node-range" />
-                    <circle cx={x} cy={y} r="1.2" className="node-point" />
-                    <text x={x + 2} y={y - 2}>
-                      P{index + 1}
-                    </text>
-                  </g>
-                ))}
-              </g>
+              {level === "region" && (
+                <g className="region-object">
+                  <FeatureGeometry feature={feature} mode="region" />
+                </g>
+              )}
+
+              {level === "unit" && (
+                <g className="unit-objects">
+                  {affectedUnits.map((unit) => (
+                    <g key={unit} clipPath={`url(#clip-${unit})`}>
+                      <FeatureGeometry feature={feature} mode="unit-context" />
+                    </g>
+                  ))}
+                  {(feature === "axis" || feature === "corridor") && (
+                    <g className="interface-markers">
+                      {(feature === "axis"
+                        ? [
+                            [28, 49.2],
+                            [72, 52.3],
+                          ]
+                        : [
+                            [32, 28],
+                            [41, 72],
+                          ]
+                      ).map(([x, y], index) => (
+                        <g key={`${x}-${y}`}>
+                          <circle
+                            cx={x}
+                            cy={y}
+                            r="1.4"
+                            style={{ fill: meta.color }}
+                          />
+                          <text x={x + 2} y={y - 1}>
+                            IF-{index + 1}
+                          </text>
+                        </g>
+                      ))}
+                    </g>
+                  )}
+                </g>
+              )}
+
+              {level === "parcel" && (
+                <g className="parcel-source-context">
+                  {affectedUnits.map((unit) => (
+                    <g key={unit} clipPath={`url(#clip-${unit})`}>
+                      <FeatureGeometry feature={feature} mode="parcel-context" />
+                    </g>
+                  ))}
+                </g>
+              )}
 
               {(Object.keys(unitMeta) as UnitId[]).map((id) => {
                 const positions: Record<UnitId, [number, number]> = {
@@ -502,23 +780,38 @@ export default function Home() {
                   core: [50, 42],
                 };
                 const [x, y] = positions[id];
+                const isAffected = affectedUnits.includes(id);
                 return (
                   <g
                     key={`label-${id}`}
-                    className={`unit-label ${
-                      id === "core" ? "core-label" : ""
-                    }`}
+                    className={`unit-label ${id === "core" ? "core-label" : ""}`}
                     onClick={() => chooseUnit(id)}
                   >
                     <text x={x} y={y} textAnchor="middle">
-                      {unitMeta[id].name}
+                      {level === "unit" && isAffected
+                        ? unitObjectId(feature, id)
+                        : unitMeta[id].name}
                     </text>
                     <text x={x} y={y + 3.4} textAnchor="middle">
-                      {unitCounts[id]} 地块
+                      {level === "unit" && isAffected
+                        ? `来源 ${meta.region.id}`
+                        : `${unitCounts[id]} 地块`}
                     </text>
                   </g>
                 );
               })}
+
+              {level === "parcel" && (
+                <g className="parcel-level-note">
+                  <rect x="2" y="2" width="31" height="8" rx="1" />
+                  <text x="4" y="5.4">
+                    斜线 = 规则适用地块
+                  </text>
+                  <text x="4" y="8.3">
+                    高亮不是复制单元对象
+                  </text>
+                </g>
+              )}
 
               <rect
                 x="0"
@@ -529,6 +822,7 @@ export default function Home() {
                 className="city-outline"
               />
             </svg>
+
             <div className="north-arrow" aria-hidden="true">
               <span>N</span>
               <i />
@@ -545,212 +839,329 @@ export default function Home() {
         <aside className="right-panel">
           <div className="inspector-kicker">
             {selectedParcel
-              ? "地块反向追溯"
-              : selectedUnit
-                ? "单元属性"
-                : "当前传导对象"}
+              ? "地块关系记录"
+              : currentUnit && level === "unit"
+                ? "单元对象属性"
+                : level === "parcel"
+                  ? "转译规则"
+                  : level === "unit"
+                    ? "单元成果对象"
+                    : "片区对象属性"}
           </div>
-          <h2>
-            {selectedParcel
-              ? `地块 ${selectedParcel.id}`
-              : selectedUnit
-                ? unitMeta[selectedUnit].name
-                : meta.name}
-          </h2>
-          <p className="object-code">
-            {selectedParcel
-              ? `PARCEL-${selectedParcel.id}`
-              : selectedUnit
-                ? `UNIT-${unitMeta[selectedUnit].short}-01`
-                : meta.eyebrow}
-          </p>
 
           {selectedParcel ? (
             <>
+              <h2>地块 {selectedParcel.id}</h2>
+              <p className="object-code">{requirementId(feature, selectedParcel)}</p>
               <div className="fact-grid">
                 <div>
-                  <span>所属单元</span>
-                  <b>{unitMeta[selectedParcel.unit].name}</b>
+                  <span>来源单元对象编号</span>
+                  <b>{unitObjectId(feature, selectedParcel.unit)}</b>
                 </div>
                 <div>
-                  <span>对象类型</span>
-                  <b>地块面</b>
+                  <span>转译规则</span>
+                  <b>{meta.translation.id}</b>
                 </div>
                 <div>
-                  <span>命中要素</span>
-                  <b>{visibleFeaturesForParcel.length} 项</b>
-                </div>
-                <div>
-                  <span>数据状态</span>
-                  <b>演示数据</b>
-                </div>
-              </div>
-              <div className="section-title">适用城市设计要素</div>
-              <div className="applied-rules">
-                {visibleFeaturesForParcel.length ? (
-                  visibleFeaturesForParcel.map((id) => (
-                    <button key={id} onClick={() => chooseFeature(id)}>
-                      <i style={{ background: featureMeta[id].color }} />
-                      <span>{featureMeta[id].name}</span>
-                      <b>查看</b>
-                    </button>
-                  ))
-                ) : (
-                  <p className="empty-state">当前地块未命中示例要素。</p>
-                )}
-              </div>
-            </>
-          ) : selectedUnit ? (
-            <>
-              <div className="fact-grid">
-                <div>
-                  <span>单元编号</span>
-                  <b>{unitMeta[selectedUnit].short}-01</b>
-                </div>
-                <div>
-                  <span>地块数量</span>
-                  <b>{unitCounts[selectedUnit]}</b>
-                </div>
-                <div>
-                  <span>单元类型</span>
-                  <b>{selectedUnit === "core" ? "核心单元" : "一般单元"}</b>
-                </div>
-                <div>
-                  <span>当前命中</span>
+                  <span>适用性判定</span>
                   <b>
-                    {
-                      activeParcels.filter(
-                        (parcel) => parcel.unit === selectedUnit,
-                      ).length
-                    }{" "}
-                    地块
+                    {appliesToParcel(selectedParcel, feature)
+                      ? "适用"
+                      : "不适用"}
+                  </b>
+                </div>
+                <div>
+                  <span>控制分区</span>
+                  <b>
+                    {selectedParcel.unit === "core"
+                      ? "重点控制区"
+                      : "一般控制区"}
                   </b>
                 </div>
               </div>
-              <div className="section-title">当前要素处置</div>
-              <div className="rule-card">
-                <span>传导判断</span>
+              <div className="section-title">逐级来源</div>
+              <div className="source-stack">
+                <div>
+                  <span>片区</span>
+                  <b>{meta.region.id}</b>
+                  <small>{meta.region.name}</small>
+                </div>
+                <i>↓</i>
+                <div>
+                  <span>单元</span>
+                  <b>{unitObjectId(feature, selectedParcel.unit)}</b>
+                  <small>{meta.unit.mode}</small>
+                </div>
+                <i>↓</i>
+                <div>
+                  <span>地块要求</span>
+                  <b>{requirementId(feature, selectedParcel)}</b>
+                  <small>{meta.translation.expression}</small>
+                </div>
+              </div>
+              <div className="section-title">生成的管控目标</div>
+              <div className="target-tags">
+                {meta.translation.targets.map((target) => (
+                  <span key={target}>{target}</span>
+                ))}
+              </div>
+              <div className="rule-card accent">
+                <span>审查方法</span>
+                <p>{meta.translation.review}</p>
+              </div>
+            </>
+          ) : currentUnit && level === "unit" ? (
+            <>
+              <h2>{meta.unit.name}</h2>
+              <p className="object-code">
+                {currentUnitAffected
+                  ? unitObjectId(feature, currentUnit)
+                  : "本单元不适用"}
+              </p>
+              <div className="fact-grid">
+                <div>
+                  <span>单元编号</span>
+                  <b>UNIT-{unitMeta[currentUnit].short}-01</b>
+                </div>
+                <div>
+                  <span>来源片区对象编号</span>
+                  <b>{currentUnitAffected ? meta.region.id : "—"}</b>
+                </div>
+                <div>
+                  <span>传导方式</span>
+                  <b>{currentUnitAffected ? meta.unit.mode : "不适用"}</b>
+                </div>
+                <div>
+                  <span>接口编号</span>
+                  <b>
+                    {currentUnitAffected
+                      ? meta.unit.interfaceId ?? "无跨界接口"
+                      : "—"}
+                  </b>
+                </div>
+              </div>
+              <div className="section-title">地块深化要求</div>
+              <div className="rule-card accent">
+                <span>下位去向</span>
                 <p>
-                  {affectedUnits.includes(selectedUnit)
-                    ? `承接“${meta.name}”，形成单元级空间对象并向命中地块继续传导。`
-                    : `当前要素未进入${unitMeta[selectedUnit].name}，记录为不适用。`}
+                  {currentUnitAffected
+                    ? meta.unit.parcelDeepening
+                    : `该片区对象未传导至${unitMeta[currentUnit].name}，记录处置结果为“不适用”。`}
                 </p>
+              </div>
+              {feature === "control" && currentUnit === "core" && (
+                <div className="state-change">
+                  <span>研究状态</span>
+                  <i>→</i>
+                  <span>单元确认</span>
+                  <i>→</i>
+                  <b>现行管控</b>
+                </div>
+              )}
+            </>
+          ) : level === "region" ? (
+            <>
+              <h2>{meta.region.name}</h2>
+              <p className="object-code">{meta.region.id}</p>
+              <div className="fact-grid">
+                <div>
+                  <span>几何表达</span>
+                  <b>{meta.region.geometry}</b>
+                </div>
+                <div>
+                  <span>数据状态</span>
+                  <b>{meta.region.status}</b>
+                </div>
+                <div>
+                  <span>控制性质</span>
+                  <b>{meta.region.controlNature}</b>
+                </div>
+                <div>
+                  <span>目标单元</span>
+                  <b>{affectedUnits.length} / 5</b>
+                </div>
+              </div>
+              <div className="section-title">单元深化要求</div>
+              <div className="rule-card">
+                <span>片区向下传导清单</span>
+                <p>{meta.region.unitDeepening}</p>
+              </div>
+              <div className="record-list">
+                {affectedUnits.map((unit) => (
+                  <button key={unit} onClick={() => chooseUnit(unit)}>
+                    <i style={{ background: unitMeta[unit].color }} />
+                    <span>
+                      <b>{unitMeta[unit].name}</b>
+                      <small>{meta.unit.mode}</small>
+                    </span>
+                    <strong>生成对象</strong>
+                  </button>
+                ))}
+              </div>
+              {feature === "control" && (
+                <div className="warning-card">
+                  片区候选范围仅进入研究成果库；必须经单元确认后才能进入现行管控。
+                </div>
+              )}
+            </>
+          ) : level === "unit" ? (
+            <>
+              <h2>{affectedUnits.length} 个单元对象</h2>
+              <p className="object-code">
+                每个对象均填写来源 {meta.region.id}
+              </p>
+              <div className="record-list large">
+                {affectedUnits.map((unit) => (
+                  <button key={unit} onClick={() => chooseUnit(unit)}>
+                    <i style={{ background: unitMeta[unit].color }} />
+                    <span>
+                      <b>{unitObjectId(feature, unit)}</b>
+                      <small>
+                        {unitMeta[unit].name} · {meta.unit.mode}
+                      </small>
+                    </span>
+                    <strong>
+                      {
+                        applicableParcels.filter(
+                          (parcel) => parcel.unit === unit,
+                        ).length
+                      }{" "}
+                      地块
+                    </strong>
+                  </button>
+                ))}
               </div>
             </>
           ) : (
             <>
-              <div className="fact-grid">
-                <div>
-                  <span>几何表达</span>
-                  <b>{meta.geometry}</b>
-                </div>
-                <div>
-                  <span>影响单元</span>
-                  <b>{affectedUnits.length} / 5</b>
-                </div>
-                <div>
-                  <span>命中地块</span>
-                  <b>{activeParcels.length}</b>
-                </div>
-                <div>
-                  <span>控制性质</span>
-                  <b>{feature === "control" ? "刚性" : "弹性"}</b>
-                </div>
+              <h2>地块适用性与规则转译</h2>
+              <p className="object-code">{meta.translation.id}</p>
+              <div className="translation-steps">
+                {[
+                  "空间叠加",
+                  "规则触发",
+                  "要求生成",
+                  "同类合并",
+                  "冲突复核",
+                  "图则关联",
+                ].map((text, index) => (
+                  <span key={text}>
+                    <b>{index + 1}</b>
+                    {text}
+                  </span>
+                ))}
               </div>
-              <div className="section-title">传导逻辑</div>
+              <div className="section-title">规则定义</div>
               <div className="rule-card">
-                <span>空间处置</span>
-                <p>{meta.rule}</p>
+                <span>空间关系</span>
+                <p>{meta.translation.relation}</p>
+              </div>
+              <div className="rule-card">
+                <span>触发条件</span>
+                <p>{meta.translation.trigger}</p>
               </div>
               <div className="rule-card accent">
-                <span>地块结果</span>
-                <p>{meta.result}</p>
+                <span>成果表达</span>
+                <p>{meta.translation.expression}</p>
+              </div>
+              <div className="status-card">
+                <div>
+                  <span className="status-icon">✓</span>
+                  <span>
+                    <b>{applicableParcels.length} 条适用性记录</b>
+                    <small>每条均关联单元对象、规则、地块和地块要求</small>
+                  </span>
+                </div>
+                <span className="status-pill">可追溯</span>
               </div>
             </>
           )}
 
-          <div className="status-card">
-            <div>
-              <span className="status-icon">✓</span>
-              <span>
-                <b>关系链完整</b>
-                <small>来源、承接对象和地块去向均可追溯</small>
-              </span>
-            </div>
-            <span className="status-pill">通过</span>
-          </div>
+          {selectedParcel && visibleFeaturesForParcel.length > 1 && (
+            <>
+              <div className="section-title">该地块的其他来源</div>
+              <div className="applied-rules">
+                {visibleFeaturesForParcel
+                  .filter((id) => id !== feature)
+                  .map((id) => (
+                    <button key={id} onClick={() => chooseFeature(id)}>
+                      <i style={{ background: featureMeta[id].color }} />
+                      <span>{featureMeta[id].region.name}</span>
+                      <b>追溯</b>
+                    </button>
+                  ))}
+              </div>
+            </>
+          )}
         </aside>
       </section>
 
       <section className="lineage-panel">
         <div className="lineage-title">
-          <span>传导关系</span>
-          <small>
-            {selectedParcel
-              ? "由地块向上追溯"
-              : "由片区对象向下展开"}
-          </small>
+          <span>逐级数据链</span>
+          <small>下位记录只保存直接上一级对象编号，不跨层混存。</small>
         </div>
-        <div className="lineage-flow">
-          <div className="lineage-column">
-            <span className="level-tag">01 · 片区</span>
-            <div className="lineage-card source">
-              <i style={{ background: meta.color }} />
-              <div>
-                <small>来源对象</small>
-                <b>{meta.name}</b>
-                <span>{meta.eyebrow.split("·").at(-1)}</span>
-              </div>
+        <div className="lineage-flow four-stage">
+          <button
+            className={`lineage-step ${level === "region" ? "active" : ""}`}
+            onClick={() => chooseLevel("region")}
+          >
+            <span>01 · 片区空间对象</span>
+            <i style={{ background: meta.color }} />
+            <div>
+              <b>{meta.region.id}</b>
+              <small>{meta.region.name}</small>
             </div>
-          </div>
-          <div className="flow-arrow">
-            <span>{selectedParcel ? "追溯" : "分解 / 继承"}</span>
+            <em>{meta.region.status}</em>
+          </button>
+          <div className="flow-arrow compact-arrow">
+            <span>{meta.unit.mode}</span>
             <i>→</i>
           </div>
-          <div className="lineage-column units">
-            <span className="level-tag">02 · 单元</span>
-            <div className="unit-chips">
-              {(selectedParcel
-                ? [selectedParcel.unit]
-                : affectedUnits
-              ).map((id) => (
-                <button
-                  key={id}
-                  className={id === "core" ? "core" : ""}
-                  onClick={() => chooseUnit(id)}
-                >
-                  <i style={{ background: unitMeta[id].color }} />
-                  <span>{unitMeta[id].name}</span>
-                  <b>
-                    {activeParcels.filter((p) => p.unit === id).length}
-                  </b>
-                </button>
-              ))}
+          <button
+            className={`lineage-step ${level === "unit" ? "active" : ""}`}
+            onClick={() => chooseLevel("unit")}
+          >
+            <span>02 · 单元空间对象</span>
+            <i style={{ background: meta.color }} />
+            <div>
+              <b>{affectedUnits.length} 条独立对象记录</b>
+              <small>来源片区对象编号 = {meta.region.id}</small>
             </div>
-          </div>
-          <div className="flow-arrow">
-            <span>{selectedParcel ? "定位" : "规则转译"}</span>
+            <em>{meta.unit.name}</em>
+          </button>
+          <div className="flow-arrow compact-arrow">
+            <span>适用性判定</span>
             <i>→</i>
           </div>
-          <div className="lineage-column">
-            <span className="level-tag">03 · 地块</span>
-            <div className="lineage-card target">
-              <div>
-                <small>{selectedParcel ? "当前地块" : "生成结果"}</small>
-                <b>
-                  {selectedParcel
-                    ? selectedParcel.id
-                    : `${activeParcels.length} 个地块要求`}
-                </b>
-                <span>
-                  {selectedParcel
-                    ? unitMeta[selectedParcel.unit].name
-                    : "已建立来源与去向关系"}
-                </span>
-              </div>
-              <strong>{selectedParcel ? "1" : activeParcels.length}</strong>
+          <button
+            className={`lineage-step rule-step ${level === "parcel" ? "active" : ""}`}
+            onClick={() => chooseLevel("parcel")}
+          >
+            <span>03 · 转译规则</span>
+            <i style={{ background: "#344b47" }} />
+            <div>
+              <b>{meta.translation.id}</b>
+              <small>{meta.translation.trigger}</small>
             </div>
+            <em>不可直接复制</em>
+          </button>
+          <div className="flow-arrow compact-arrow">
+            <span>要求生成</span>
+            <i>→</i>
           </div>
+          <button
+            className={`lineage-step result-step ${level === "parcel" ? "active" : ""}`}
+            onClick={() => chooseLevel("parcel")}
+          >
+            <span>04 · 地块管控要求</span>
+            <i style={{ background: meta.color }} />
+            <div>
+              <b>{applicableParcels.length} 条地块关系</b>
+              <small>{meta.translation.targets.join(" / ")}</small>
+            </div>
+            <em>关联图则实体</em>
+          </button>
         </div>
       </section>
     </main>
