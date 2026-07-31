@@ -1,6 +1,14 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import {
+  type CatalogItem,
+  type CatalogLevel,
+  elementCatalog,
+  generalControlStrategies,
+  keyControlStrategies,
+  transmissionStrategies,
+} from "./catalog-data";
 
 type UnitId = "north" | "east" | "south" | "west" | "core";
 type FeatureId = "urban-core" | "axis" | "corridor" | "nodes" | "control";
@@ -402,6 +410,326 @@ function FeatureGeometry({
   );
 }
 
+const catalogLevelMeta: Record<
+  CatalogLevel,
+  { name: string; count: number; database: string }
+> = {
+  region: { name: "片区", count: 20, database: "片区城市设计.gdb" },
+  unit: { name: "单元", count: 21, database: "单元城市设计.gdb" },
+  parcel: { name: "地块", count: 29, database: "地块城市设计.gdb" },
+};
+
+const catalogPalette = [
+  "#c8523b",
+  "#3f7180",
+  "#4f8765",
+  "#9a6d3c",
+  "#7b6584",
+  "#4f6c9b",
+  "#8d705b",
+  "#607a73",
+];
+
+function groupColor(group: string) {
+  let value = 0;
+  for (let index = 0; index < group.length; index += 1) {
+    value = (value + group.charCodeAt(index) * (index + 3)) % 997;
+  }
+  return catalogPalette[value % catalogPalette.length];
+}
+
+function CatalogShape({
+  item,
+  index,
+  selected,
+  onSelect,
+}: {
+  item: CatalogItem;
+  index: number;
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  const color = groupColor(item.group);
+  const x = 8 + ((index * 17 + 11) % 78);
+  const y = 9 + ((index * 29 + 7) % 78);
+
+  if (item.geometry === "点") {
+    return (
+      <g
+        className={`catalog-shape point-shape ${selected ? "selected" : ""}`}
+        onClick={onSelect}
+      >
+        <circle cx={x} cy={y} r={selected ? 3.2 : 2.2} fill={color} />
+        <circle cx={x} cy={y} r={selected ? 6 : 4.5} stroke={color} />
+        <text x={x + 3.6} y={y - 2.5}>
+          {item.id}
+        </text>
+      </g>
+    );
+  }
+
+  if (item.geometry === "线") {
+    const x2 = Math.min(96, x + 18 + (index % 3) * 4);
+    const y2 = Math.min(96, Math.max(4, y + ((index % 5) - 2) * 5));
+    return (
+      <g
+        className={`catalog-shape line-shape ${selected ? "selected" : ""}`}
+        onClick={onSelect}
+      >
+        <path
+          d={`M ${x} ${y} Q ${(x + x2) / 2} ${y - 5} ${x2} ${y2}`}
+          stroke={color}
+        />
+        <text x={x + 2} y={y - 2}>
+          {item.id}
+        </text>
+      </g>
+    );
+  }
+
+  const width = 10 + (index % 4) * 3;
+  const height = 8 + (index % 3) * 3;
+  return (
+    <g
+      className={`catalog-shape area-shape ${selected ? "selected" : ""}`}
+      onClick={onSelect}
+    >
+      <rect
+        x={Math.min(95 - width, x)}
+        y={Math.min(95 - height, y)}
+        width={width}
+        height={height}
+        rx="1"
+        fill={color}
+        stroke={color}
+      />
+      <text x={Math.min(95 - width, x) + 1.5} y={Math.min(95 - height, y) + 3}>
+        {item.id}
+      </text>
+    </g>
+  );
+}
+
+function CatalogOverview() {
+  const [catalogLevel, setCatalogLevel] = useState<CatalogLevel>("unit");
+  const [selectedId, setSelectedId] = useState("U-02");
+  const [strategyTab, setStrategyTab] = useState<
+    "transmission" | "general" | "key"
+  >("transmission");
+  const items = elementCatalog[catalogLevel];
+  const selected =
+    items.find((item) => item.id === selectedId) ?? items[0];
+  const groupedItems = useMemo(() => {
+    return items.reduce(
+      (groups, item) => {
+        (groups[item.group] ??= []).push(item);
+        return groups;
+      },
+      {} as Record<string, CatalogItem[]>,
+    );
+  }, [items]);
+  const strategies =
+    strategyTab === "general"
+      ? generalControlStrategies
+      : strategyTab === "key"
+        ? keyControlStrategies
+        : transmissionStrategies;
+
+  function switchCatalogLevel(next: CatalogLevel) {
+    setCatalogLevel(next);
+    setSelectedId(elementCatalog[next][0].id);
+  }
+
+  return (
+    <section className="catalog-overview">
+      <aside className="catalog-tree">
+        <div className="catalog-title">
+          <span>空间要素标准目录</span>
+          <small>共 70 类要素</small>
+        </div>
+        <div className="catalog-level-tabs">
+          {(Object.keys(catalogLevelMeta) as CatalogLevel[]).map((level) => (
+            <button
+              key={level}
+              className={catalogLevel === level ? "active" : ""}
+              onClick={() => switchCatalogLevel(level)}
+            >
+              <b>{catalogLevelMeta[level].count}</b>
+              <span>{catalogLevelMeta[level].name}</span>
+            </button>
+          ))}
+        </div>
+        <div className="catalog-database">
+          <span>{catalogLevelMeta[catalogLevel].database}</span>
+          <small>点、线、面分要素类组织</small>
+        </div>
+        <div className="catalog-groups">
+          {Object.entries(groupedItems).map(([group, groupItems]) => (
+            <div key={group} className="catalog-group">
+              <div className="catalog-group-heading">
+                <i style={{ background: groupColor(group) }} />
+                <span>{group}</span>
+                <b>{groupItems.length}</b>
+              </div>
+              {groupItems.map((item) => (
+                <button
+                  key={item.id}
+                  className={selected.id === item.id ? "active" : ""}
+                  onClick={() => setSelectedId(item.id)}
+                >
+                  <span>{item.id}</span>
+                  <b>{item.name}</b>
+                  <em>{item.geometry}</em>
+                </button>
+              ))}
+            </div>
+          ))}
+        </div>
+      </aside>
+
+      <section className="catalog-map-panel">
+        <div className="catalog-map-toolbar">
+          <div>
+            <span>全要素空间表达</span>
+            <small>
+              当前显示 {catalogLevelMeta[catalogLevel].name}层 {items.length} 类标准要素
+            </small>
+          </div>
+          <div className="geometry-counts">
+            {(["点", "线", "面"] as const).map((geometry) => (
+              <span key={geometry}>
+                {geometry}{" "}
+                <b>{items.filter((item) => item.geometry === geometry).length}</b>
+              </span>
+            ))}
+          </div>
+        </div>
+        <div className="catalog-map-wrap">
+          <svg
+            className="catalog-map"
+            viewBox="0 0 100 100"
+            aria-label={`${catalogLevelMeta[catalogLevel].name}层全部空间要素示意`}
+          >
+            <defs>
+              <pattern
+                id="catalogGrid"
+                width="4"
+                height="4"
+                patternUnits="userSpaceOnUse"
+              >
+                <path
+                  d="M 4 0 L 0 0 0 4"
+                  fill="none"
+                  stroke="#d9dad2"
+                  strokeWidth=".15"
+                />
+              </pattern>
+            </defs>
+            <rect x="1" y="1" width="98" height="98" rx="1" className="catalog-base" />
+            <rect x="1" y="1" width="98" height="98" fill="url(#catalogGrid)" />
+            {(Object.keys(unitMeta) as UnitId[]).map((unit) => (
+              <polygon
+                key={unit}
+                points={unitMeta[unit].polygon}
+                className="catalog-unit-context"
+              />
+            ))}
+            {items.map((item, index) => (
+              <CatalogShape
+                key={item.id}
+                item={item}
+                index={index}
+                selected={selected.id === item.id}
+                onSelect={() => setSelectedId(item.id)}
+              />
+            ))}
+            <rect x="1" y="1" width="98" height="98" rx="1" className="catalog-outline" />
+          </svg>
+          <div className="catalog-map-legend">
+            {Object.keys(groupedItems).map((group) => (
+              <span key={group}>
+                <i style={{ background: groupColor(group) }} />
+                {group}
+              </span>
+            ))}
+          </div>
+        </div>
+        <div className="catalog-selection">
+          <div className="catalog-selection-code">
+            <span>{selected.id}</span>
+            <b>{selected.geometry}</b>
+          </div>
+          <div>
+            <small>{selected.group}</small>
+            <h2>{selected.name}</h2>
+            <p>{selected.content}</p>
+          </div>
+          <div className="catalog-transmission">
+            <span>逐级传导要求</span>
+            <p>{selected.transmission}</p>
+          </div>
+        </div>
+      </section>
+
+      <aside className="strategy-library">
+        <div className="catalog-title">
+          <span>控制策略库</span>
+          <small>完整规则集</small>
+        </div>
+        <div className="strategy-tabs">
+          <button
+            className={strategyTab === "transmission" ? "active" : ""}
+            onClick={() => setStrategyTab("transmission")}
+          >
+            传导方式 <b>10</b>
+          </button>
+          <button
+            className={strategyTab === "general" ? "active" : ""}
+            onClick={() => setStrategyTab("general")}
+          >
+            一般控制 <b>8</b>
+          </button>
+          <button
+            className={strategyTab === "key" ? "active" : ""}
+            onClick={() => setStrategyTab("key")}
+          >
+            重点控制 <b>5</b>
+          </button>
+        </div>
+        <div className="control-nature">
+          <span>控制性质</span>
+          <b>刚性</b>
+          <b>弹性</b>
+          <b>引导</b>
+        </div>
+        <div className="strategy-list">
+          {strategies.map((strategy) => (
+            <details key={strategy.id} open={strategies[0].id === strategy.id}>
+              <summary>
+                <span>{strategy.id}</span>
+                <b>{strategy.name}</b>
+                <i>＋</i>
+              </summary>
+              <div>
+                <small>适用/触发条件</small>
+                <p>{strategy.condition}</p>
+                <small>成果表达</small>
+                <p>{strategy.expression}</p>
+                <small>控制或记录要求</small>
+                <p>{strategy.requirement}</p>
+              </div>
+            </details>
+          ))}
+        </div>
+        <div className="strategy-footnote">
+          <b>规则约束</b>
+          <span>重点控制区只能确定一种重点控制类型；具体控制值不得由入库人员自行设定。</span>
+        </div>
+      </aside>
+    </section>
+  );
+}
+
 export default function Home() {
   const parcels = useMemo<Parcel[]>(() => {
     return Array.from({ length: GRID * GRID }, (_, index) => {
@@ -421,6 +749,9 @@ export default function Home() {
   }, []);
 
   const [feature, setFeature] = useState<FeatureId>("axis");
+  const [viewMode, setViewMode] = useState<"transmission" | "catalog">(
+    "catalog",
+  );
   const [level, setLevel] = useState<Level>("region");
   const [selectedParcel, setSelectedParcel] = useState<Parcel | null>(null);
   const [selectedUnit, setSelectedUnit] = useState<UnitId | null>(null);
@@ -493,7 +824,9 @@ export default function Home() {
         : applicableParcels.length;
 
   return (
-    <main className="app-shell">
+    <main
+      className={`app-shell ${viewMode === "catalog" ? "catalog-mode" : ""}`}
+    >
       <header className="topbar">
         <div className="brand">
           <span className="brand-mark">西安·城市设计</span>
@@ -504,8 +837,22 @@ export default function Home() {
           </div>
         </div>
         <div className="topbar-actions">
+          <div className="view-switch">
+            <button
+              className={viewMode === "transmission" ? "active" : ""}
+              onClick={() => setViewMode("transmission")}
+            >
+              逐级传导
+            </button>
+            <button
+              className={viewMode === "catalog" ? "active" : ""}
+              onClick={() => setViewMode("catalog")}
+            >
+              全要素与策略
+            </button>
+          </div>
           <span className="scenario-dot" />
-          <span>数据模型 v0.2</span>
+          <span>数据模型 v0.3</span>
           <span className="no-skip-badge">禁止跨级传导</span>
           <button
             className="reset-button"
@@ -521,7 +868,11 @@ export default function Home() {
         </div>
       </header>
 
-      <section className="workspace">
+      {viewMode === "catalog" ? (
+        <CatalogOverview />
+      ) : (
+        <>
+          <section className="workspace">
         <aside className="left-panel">
           <div className="panel-heading">
             <span>片区成果对象</span>
@@ -1096,7 +1447,7 @@ export default function Home() {
         </aside>
       </section>
 
-      <section className="lineage-panel">
+          <section className="lineage-panel">
         <div className="lineage-title">
           <span>逐级数据链</span>
           <small>下位记录只保存直接上一级对象编号，不跨层混存。</small>
@@ -1163,7 +1514,9 @@ export default function Home() {
             <em>关联图则实体</em>
           </button>
         </div>
-      </section>
+          </section>
+        </>
+      )}
     </main>
   );
 }
