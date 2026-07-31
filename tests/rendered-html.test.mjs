@@ -1,91 +1,70 @@
 import assert from "node:assert/strict";
-import { access, readFile, readdir } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-const developmentPreviewMeta =
-  /<meta(?=[^>]*\bname=["']codex-preview["'])(?=[^>]*\bcontent=["']development["'])[^>]*>/i;
-const templateRoot = new URL("../", import.meta.url);
-const previewRoot = new URL("../app/_sites-preview/", import.meta.url);
+const root = new URL("../", import.meta.url);
 
-async function render() {
-  const workerUrl = new URL("../dist/server/index.js", import.meta.url);
-  workerUrl.searchParams.set("test", `${process.pid}-${Date.now()}`);
-  const { default: worker } = await import(workerUrl.href);
-
-  return worker.fetch(
-    new Request("http://localhost/", {
-      headers: { accept: "text/html" },
-    }),
-    {
-      ASSETS: {
-        fetch: async () => new Response("Not found", { status: 404 }),
-      },
-    },
-    {
-      waitUntil() {},
-      passThroughOnException() {},
-    },
-  );
+async function sources() {
+  const [catalog, model, page, css] = await Promise.all([
+    readFile(new URL("app/catalog-data.ts", root), "utf8"),
+    readFile(new URL("app/urban-model.ts", root), "utf8"),
+    readFile(new URL("app/page.tsx", root), "utf8"),
+    readFile(new URL("app/globals.css", root), "utf8"),
+  ]);
+  return { catalog, model, page, css };
 }
 
-test("server-renders the starter loading skeleton", async () => {
-  const response = await render();
-  assert.equal(response.status, 200);
-  assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
-
-  const html = await response.text();
-  assert.match(html, developmentPreviewMeta);
-  assert.match(html, /<title>Your site is taking shape<\/title>/i);
-  assert.match(html, /Building your site/);
-  assert.match(html, /Your site is taking shape/);
-  assert.match(
-    html,
-    /Your first version will appear here automatically when it’s ready\./,
-  );
-  assert.doesNotMatch(html, /Codex/);
-  assert.match(html, /react-loading-skeleton/);
-  assert.match(html, /role="status"/);
+test("keeps the complete 20/21/29 spatial-element catalog", async () => {
+  const { catalog } = await sources();
+  assert.equal(catalog.match(/id: "R-\d{2}"/g)?.length, 20);
+  assert.equal(catalog.match(/id: "U-\d{2}"/g)?.length, 21);
+  assert.equal(catalog.match(/id: "P-\d{2}"/g)?.length, 29);
+  assert.equal(catalog.match(/id: "T-\d{2}"/g)?.length, 10);
+  assert.equal(catalog.match(/id: "G-\d{2}"/g)?.length, 8);
+  assert.equal(catalog.match(/id: "K-\d{2}"/g)?.length, 5);
 });
 
-test("keeps the loading skeleton scoped and disposable", async () => {
-  const [preview, css, page, layout, packageJson, files] = await Promise.all([
-    readFile(new URL("SkeletonPreview.tsx", previewRoot), "utf8"),
-    readFile(new URL("preview.css", previewRoot), "utf8"),
-    readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
-    readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
-    readFile(new URL("../package.json", import.meta.url), "utf8"),
-    readdir(previewRoot),
-  ]);
-
-  assert.deepEqual(files.sort(), ["SkeletonPreview.tsx", "preview.css"]);
-  assert.match(preview, /from "react-loading-skeleton"/);
-  assert.match(preview, /baseColor="#eceae7"/);
-  assert.match(preview, /highlightColor="#f9f8f6"/);
-  assert.match(preview, /duration=\{2\.8\}/);
-  assert.match(preview, /sites-skeleton-search-placeholder/);
-  assert.match(packageJson, /"react-loading-skeleton": "3\.5\.0"/);
-
-  const shellIndex = preview.indexOf('className="sites-skeleton-shell"');
-  const statusIndex = preview.indexOf('className="sites-skeleton-status"');
-  assert.ok(shellIndex >= 0 && statusIndex > shellIndex);
-  assert.match(css, /position:\s*fixed/);
-  assert.match(css, /inset:\s*0/);
-  assert.match(css, /opacity:\s*0\.52/);
-  assert.match(css, /prefers-reduced-motion:\s*reduce/);
-  assert.doesNotMatch(css, /#020617|canvas|pets|progress/i);
-  assert.doesNotMatch(
-    preview,
-    /loading-spinner|status-mark|status-progress|canvas|cookie|random/i,
+test("builds five 120-parcel units and a four-level road network", async () => {
+  const { model } = await sources();
+  const grids = [...model.matchAll(/columns:\s*(\d+),\s*\n\s*rows:\s*(\d+),/g)];
+  assert.equal(grids.length, 5);
+  assert.deepEqual(
+    grids.map((match) => Number(match[1]) * Number(match[2])),
+    [120, 120, 120, 120, 120],
   );
+  assert.match(model, /id: "core"/);
+  for (const roadClass of ["快速路", "主干路", "次干路", "支路"]) {
+    assert.match(model, new RegExp(`roadClass: "${roadClass}"`));
+  }
+});
 
-  assert.match(page, /export const metadata:\s*Metadata/);
-  assert.match(page, /"codex-preview": "development"/);
-  assert.match(page, /<SkeletonPreview \/>/);
-  assert.match(layout, /title:\s*"Starter Project"/);
-  assert.doesNotMatch(layout, /codex-preview|_sites-preview|themeColor|\bViewport\b/);
-  assert.doesNotMatch(css, /(^|\s)(html|body)\s*\{/m);
+test("separates regional, unit and parcel control depth", async () => {
+  const { model, page } = await sources();
+  assert.match(model, /verb: "统筹"/);
+  assert.match(model, /verb: "落实"/);
+  assert.match(model, /verb: "转译"/);
+  assert.match(model, /不复制单元影响范围/);
+  assert.match(model, /唯一重点类型/);
 
-  await assert.rejects(
-    access(new URL("public/_sites-preview", templateRoot)),
-  );
+  for (const step of [
+    "空间叠加",
+    "规则触发",
+    "要求生成",
+    "同类合并",
+    "冲突复核",
+    "图则关联",
+  ]) {
+    assert.match(page, new RegExp(step));
+  }
+});
+
+test("exposes the six-part quality gate and stable map symbology", async () => {
+  const { model, page, css } = await sources();
+  assert.equal(model.match(/id: "Q-\d{2}"/g)?.length, 6);
+  assert.match(page, /QualityGate/);
+  assert.match(page, /专业假想城 · 非现状法定图/);
+  assert.match(css, /\.road-casing/);
+  assert.match(css, /\.unit-boundary/);
+  assert.match(css, /\.parcel-control-line/);
+  assert.match(css, /\.candidate-zone/);
 });

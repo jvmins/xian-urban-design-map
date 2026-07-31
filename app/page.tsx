@@ -9,1514 +9,1024 @@ import {
   keyControlStrategies,
   transmissionStrategies,
 } from "./catalog-data";
+import {
+  type Parcel,
+  type RoadClass,
+  generateParcels,
+  getChainProfile,
+  levelPrinciples,
+  profileKeyFor,
+  reviewChecklist,
+  roads,
+  unitById,
+  units,
+} from "./urban-model";
 
-type UnitId = "north" | "east" | "south" | "west" | "core";
-type FeatureId = "urban-core" | "axis" | "corridor" | "nodes" | "control";
-type Level = "region" | "unit" | "parcel";
+const levelOrder: CatalogLevel[] = ["region", "unit", "parcel"];
 
-type Parcel = {
-  id: string;
-  index: number;
-  x: number;
-  y: number;
-  cx: number;
-  cy: number;
-  unit: UnitId;
-};
-
-type FeatureDefinition = {
-  category: string;
-  color: string;
-  region: {
-    id: string;
-    name: string;
-    geometry: string;
-    status: string;
-    controlNature: string;
-    unitDeepening: string;
-  };
-  unit: {
-    code: string;
-    name: string;
-    mode: string;
-    parcelDeepening: string;
-    interfaceId?: string;
-  };
-  translation: {
-    id: string;
-    relation: string;
-    trigger: string;
-    targets: string[];
-    expression: string;
-    review: string;
-  };
-};
-
-const GRID = 25;
-const CELL = 4;
-
-const unitMeta: Record<
-  UnitId,
-  { name: string; short: string; color: string; polygon: string }
-> = {
-  north: {
-    name: "北部门户单元",
-    short: "N",
-    color: "#466d75",
-    polygon: "0,0 100,0 72,28 28,28",
-  },
-  east: {
-    name: "东部活力单元",
-    short: "E",
-    color: "#a36a3d",
-    polygon: "100,0 100,100 72,72 72,28",
-  },
-  south: {
-    name: "南部生态单元",
-    short: "S",
-    color: "#567b52",
-    polygon: "0,100 100,100 72,72 28,72",
-  },
-  west: {
-    name: "西部更新单元",
-    short: "W",
-    color: "#77657f",
-    polygon: "0,0 28,28 28,72 0,100",
-  },
-  core: {
-    name: "中央核心单元",
-    short: "C",
-    color: "#c74f3a",
-    polygon: "28,28 72,28 72,72 28,72",
-  },
-};
-
-const featureMeta: Record<FeatureId, FeatureDefinition> = {
-  "urban-core": {
-    category: "特色空间结构",
-    color: "#d8573d",
-    region: {
-      id: "R-CORE-01",
-      name: "片区城市核心",
-      geometry: "面",
-      status: "审查确认",
-      controlNature: "弹性",
-      unitDeepening:
-        "明确承接单元、功能关系、公共空间组织及需在单元量化的高度体量事项。",
-    },
-    unit: {
-      code: "CORE",
-      name: "单元核心",
-      mode: "深化细化",
-      parcelDeepening:
-        "向地块传导功能组织、公共空间、高度体量、慢行联系和标志节点。",
-    },
-    translation: {
-      id: "TR-CORE-01",
-      relation: "地块中心点位于单元核心范围",
-      trigger: "空间叠加 = 包含",
-      targets: ["功能组织", "公共空间", "高度体量", "慢行联系"],
-      expression: "地块要求表 + 附加图则控制面",
-      review: "核对地块功能、公共空间和高度体量是否承接单元核心要求。",
-    },
-  },
-  axis: {
-    category: "特色空间结构",
-    color: "#e19a38",
-    region: {
-      id: "R-AXIS-01",
-      name: "片区东西发展轴",
-      geometry: "中心线 + 影响范围",
-      status: "审查确认",
-      controlNature: "弹性",
-      unitDeepening:
-        "按单元形成独立轴线对象，明确起讫节点、连续界面、影响范围及跨单元接口。",
-    },
-    unit: {
-      code: "AXIS",
-      name: "单元轴线及影响范围",
-      mode: "分割继承",
-      interfaceId: "IF-EW-AXIS-01",
-      parcelDeepening:
-        "向地块传导建筑控制线、沿街界面、高度节奏、高点、开放空间和慢行接口。",
-    },
-    translation: {
-      id: "TR-AXIS-01",
-      relation: "地块与单元轴线影响范围相交",
-      trigger: "相交面积 > 0",
-      targets: ["建筑控制线", "连续界面", "高度节奏", "慢行接口"],
-      expression: "地块要求表 + CAD线实体",
-      review: "核对控制线、连续界面及相邻地块接口是否在图则中完整表达。",
-    },
-  },
-  corridor: {
-    category: "开放空间体系",
-    color: "#4d9671",
-    region: {
-      id: "R-COR-01",
-      name: "片区南北生态廊道",
-      geometry: "中心线 + 控制范围",
-      status: "审查确认",
-      controlNature: "刚性",
-      unitDeepening:
-        "分单元落实廊道边界、有效宽度、连续性、断点与跨单元接口。",
-    },
-    unit: {
-      code: "COR",
-      name: "单元生态廊道",
-      mode: "分割继承",
-      interfaceId: "IF-NS-COR-01",
-      parcelDeepening:
-        "向地块传导生态缓冲、建设限制、蓝绿连续、公共可达和接口控制。",
-    },
-    translation: {
-      id: "TR-COR-01",
-      relation: "地块与单元生态廊道控制范围相交",
-      trigger: "相交面积 > 0",
-      targets: ["生态连续空间", "建设退让", "城市绿道", "公共出入口"],
-      expression: "地块要求表 + 控制面/中心线",
-      review: "检查退让边界、廊道有效宽度和跨地块接口是否连续。",
-    },
-  },
-  nodes: {
-    category: "开放空间体系",
-    color: "#5f7db4",
-    region: {
-      id: "R-NODE-SYS-01",
-      name: "片区公共空间节点体系",
-      geometry: "节点 + 服务范围",
-      status: "审查确认",
-      controlNature: "引导",
-      unitDeepening:
-        "节点按所在单元深化位置、范围、功能、服务对象及与轴线和廊道的关系。",
-    },
-    unit: {
-      code: "NODE",
-      name: "单元公共空间节点",
-      mode: "深化细化",
-      parcelDeepening:
-        "向地块传导节点位置、边界、面积、功能、可达性、首层开放和连接通道。",
-    },
-    translation: {
-      id: "TR-NODE-01",
-      relation: "地块与单元节点服务范围相交",
-      trigger: "相交或邻接",
-      targets: ["公共空间节点", "首层开放空间", "出入口", "慢行联系"],
-      expression: "地块要求表 + 点/面成组实体",
-      review: "核对节点点位是否位于范围内，出入口与慢行联系是否连续。",
-    },
-  },
-  control: {
-    category: "城市设计控制区",
-    color: "#9a5c8e",
-    region: {
-      id: "R-ZONE-CAND-01",
-      name: "片区重点控制区候选范围",
-      geometry: "候选面",
-      status: "研究成果库",
-      controlNature: "研究建议",
-      unitDeepening:
-        "片区仅提出候选范围、建议级别、唯一重点类型和核心问题；不得直接作为现行管控数据。",
-    },
-    unit: {
-      code: "ZONE",
-      name: "单元一级重点控制区",
-      mode: "确认转化",
-      parcelDeepening:
-        "由单元确认边界、一级控制级别和唯一重点类型，再形成分地块任务。",
-    },
-    translation: {
-      id: "TR-ZONE-01",
-      relation: "地块位于单元重点控制区",
-      trigger: "控制分区 = 重点控制区",
-      targets: ["重要发展区强化规则包", "重点控制附加图则", "重点审查任务"],
-      expression: "控制区属性 + 强化要求 + 附加图则",
-      review: "核对控制级别和重点类型唯一性，不得叠加多个重点类型。",
-    },
-  },
-};
-
-const featureOrder: FeatureId[] = [
-  "urban-core",
-  "axis",
-  "corridor",
-  "nodes",
-  "control",
-];
-
-const stageMeta: Record<
-  Level,
-  { number: string; name: string; database: string; explanation: string }
+const levelMeta: Record<
+  CatalogLevel,
+  { name: string; count: number; database: string; scale: string }
 > = {
   region: {
-    number: "01",
-    name: "片区空间对象",
+    name: "片区",
+    count: 20,
     database: "片区城市设计.gdb",
-    explanation: "形成完整对象与分单元深化任务，不直接生成地块要求。",
+    scale: "跨单元总体控制",
   },
   unit: {
-    number: "02",
-    name: "单元空间对象",
+    name: "单元",
+    count: 21,
     database: "单元城市设计.gdb",
-    explanation: "逐单元建立新对象，填写来源片区对象编号和传导方式。",
+    scale: "六类11项空间系统",
   },
   parcel: {
-    number: "03",
-    name: "地块管控要求",
+    name: "地块",
+    count: 29,
     database: "地块城市设计.gdb",
-    explanation: "先判定适用性，再通过转译规则生成地块要求和图则对象。",
+    scale: "附加图则与审查对象",
   },
 };
 
-function assignUnit(ix: number, iy: number): UnitId {
-  if (ix >= 7 && ix <= 17 && iy >= 7 && iy <= 17) return "core";
-  const dx = ix - 12;
-  const dy = iy - 12;
-  if (Math.abs(dx) > Math.abs(dy)) return dx > 0 ? "east" : "west";
-  return dy > 0 ? "south" : "north";
-}
-
-function appliesToParcel(parcel: Parcel, feature: FeatureId) {
-  const { cx, cy, unit } = parcel;
-  if (feature === "urban-core") {
-    return unit === "core" && Math.hypot(cx - 50, cy - 50) < 20;
-  }
-  if (feature === "axis") return Math.abs(cy - (50 + (cx - 50) * -0.06)) < 6;
-  if (feature === "corridor") {
-    return Math.abs(cx - (28 + cy * 0.18)) < 5;
-  }
-  if (feature === "nodes") {
-    return [
-      [50, 50],
-      [50, 20],
-      [80, 50],
-      [50, 80],
-      [20, 50],
-    ].some(([x, y]) => Math.hypot(cx - x, cy - y) < 7);
-  }
-  return unit === "core";
-}
-
-function unitObjectId(feature: FeatureId, unit: UnitId) {
-  return `U-${unitMeta[unit].short}-${featureMeta[feature].unit.code}-01`;
-}
-
-function requirementId(feature: FeatureId, parcel: Parcel) {
-  return `REQ-${featureMeta[feature].unit.code}-${parcel.id}`;
-}
-
-function FeatureGeometry({
-  feature,
-  mode,
-}: {
-  feature: FeatureId;
-  mode: "region" | "unit-context" | "parcel-context";
-}) {
-  const color = featureMeta[feature].color;
-  const modeClass = `geometry-${mode}`;
-
-  if (feature === "urban-core") {
-    return (
-      <rect
-        x="32"
-        y="32"
-        width="36"
-        height="36"
-        rx="4"
-        className={`data-geometry core-geometry ${modeClass}`}
-        style={{ stroke: color }}
-      />
-    );
-  }
-
-  if (feature === "axis") {
-    return (
-      <>
-        <path
-          d="M 4 52 C 28 46, 62 56, 96 48"
-          className={`data-geometry geometry-range axis-range ${modeClass}`}
-          style={{ stroke: color }}
-        />
-        <path
-          d="M 4 52 C 28 46, 62 56, 96 48"
-          className={`data-geometry geometry-line ${modeClass}`}
-          style={{ stroke: color }}
-        />
-      </>
-    );
-  }
-
-  if (feature === "corridor") {
-    return (
-      <>
-        <path
-          d="M 28 2 C 27 34, 36 64, 46 98"
-          className={`data-geometry geometry-range corridor-range ${modeClass}`}
-          style={{ stroke: color }}
-        />
-        <path
-          d="M 28 2 C 27 34, 36 64, 46 98"
-          className={`data-geometry geometry-line ${modeClass}`}
-          style={{ stroke: color }}
-        />
-      </>
-    );
-  }
-
-  if (feature === "nodes") {
-    return (
-      <>
-        {[
-          [50, 50],
-          [50, 20],
-          [80, 50],
-          [50, 80],
-          [20, 50],
-        ].map(([x, y], index) => (
-          <g key={`${x}-${y}`} className={`node-object ${modeClass}`}>
-            <circle
-              cx={x}
-              cy={y}
-              r="5.5"
-              className="node-service-range"
-              style={{ stroke: color }}
-            />
-            <circle
-              cx={x}
-              cy={y}
-              r="1.25"
-              className="node-location"
-              style={{ fill: color }}
-            />
-            <text x={x + 2} y={y - 2}>
-              N{index + 1}
-            </text>
-          </g>
-        ))}
-      </>
-    );
-  }
-
-  return (
-    <rect
-      x="28"
-      y="28"
-      width="44"
-      height="44"
-      rx="2"
-      className={`data-geometry control-candidate ${modeClass}`}
-      style={{ stroke: color }}
-    />
-  );
-}
-
-const catalogLevelMeta: Record<
-  CatalogLevel,
-  { name: string; count: number; database: string }
-> = {
-  region: { name: "片区", count: 20, database: "片区城市设计.gdb" },
-  unit: { name: "单元", count: 21, database: "单元城市设计.gdb" },
-  parcel: { name: "地块", count: 29, database: "地块城市设计.gdb" },
+const landUseColors: Record<Parcel["landUse"], string> = {
+  居住: "#e8dfcf",
+  商办: "#d8c7b8",
+  公共服务: "#c9d8d5",
+  产业研发: "#d5d4c3",
+  绿地: "#c9dac4",
 };
 
-const catalogPalette = [
-  "#c8523b",
-  "#3f7180",
-  "#4f8765",
-  "#9a6d3c",
-  "#7b6584",
-  "#4f6c9b",
-  "#8d705b",
-  "#607a73",
-];
+const roadWidths: Record<RoadClass, { casing: number; fill: number }> = {
+  快速路: { casing: 2.9, fill: 2.1 },
+  主干路: { casing: 2.25, fill: 1.62 },
+  次干路: { casing: 1.45, fill: 1.02 },
+  支路: { casing: 0.72, fill: 0.46 },
+};
 
 function groupColor(group: string) {
+  const palette = [
+    "#bd553f",
+    "#3f7480",
+    "#548164",
+    "#9b7040",
+    "#786887",
+    "#4f6d98",
+    "#8d705b",
+    "#607a73",
+  ];
   let value = 0;
   for (let index = 0; index < group.length; index += 1) {
     value = (value + group.charCodeAt(index) * (index + 3)) % 997;
   }
-  return catalogPalette[value % catalogPalette.length];
+  return palette[value % palette.length];
 }
 
-function CatalogShape({
-  item,
-  index,
-  selected,
-  onSelect,
-}: {
-  item: CatalogItem;
-  index: number;
-  selected: boolean;
-  onSelect: () => void;
-}) {
-  const color = groupColor(item.group);
-  const x = 8 + ((index * 17 + 11) % 78);
-  const y = 9 + ((index * 29 + 7) % 78);
-
-  if (item.geometry === "点") {
-    return (
-      <g
-        className={`catalog-shape point-shape ${selected ? "selected" : ""}`}
-        onClick={onSelect}
-      >
-        <circle cx={x} cy={y} r={selected ? 3.2 : 2.2} fill={color} />
-        <circle cx={x} cy={y} r={selected ? 6 : 4.5} stroke={color} />
-        <text x={x + 3.6} y={y - 2.5}>
-          {item.id}
-        </text>
-      </g>
-    );
+function isAffectedParcel(parcel: Parcel, item: CatalogItem) {
+  const key = profileKeyFor(item);
+  if (key === "boundary") return true;
+  if (key === "core") {
+    return parcel.unit === "core" && Math.hypot(parcel.cx - 60, parcel.cy - 60) < 21;
   }
-
-  if (item.geometry === "线") {
-    const x2 = Math.min(96, x + 18 + (index % 3) * 4);
-    const y2 = Math.min(96, Math.max(4, y + ((index % 5) - 2) * 5));
-    return (
-      <g
-        className={`catalog-shape line-shape ${selected ? "selected" : ""}`}
-        onClick={onSelect}
-      >
-        <path
-          d={`M ${x} ${y} Q ${(x + x2) / 2} ${y - 5} ${x2} ${y2}`}
-          stroke={color}
-        />
-        <text x={x + 2} y={y - 2}>
-          {item.id}
-        </text>
-      </g>
-    );
+  if (key === "axis") {
+    return Math.abs(parcel.cy - 60) < 6.5 || Math.abs(parcel.cx - 60) < 4.2;
   }
+  if (key === "center") {
+    return [
+      [60, 60],
+      [60, 20],
+      [100, 60],
+      [60, 100],
+      [20, 60],
+    ].some(([x, y]) => Math.hypot(parcel.cx - x, parcel.cy - y) < 8);
+  }
+  if (key === "wedge") {
+    return parcel.cy > 76 && parcel.cx < 54 + (parcel.cy - 76) * 0.55;
+  }
+  if (key === "ring") {
+    const onHorizontal = parcel.cx > 35 && parcel.cx < 85 &&
+      (Math.abs(parcel.cy - 38) < 4 || Math.abs(parcel.cy - 82) < 4);
+    const onVertical = parcel.cy > 35 && parcel.cy < 85 &&
+      (Math.abs(parcel.cx - 38) < 4 || Math.abs(parcel.cx - 82) < 4);
+    return onHorizontal || onVertical;
+  }
+  if (key === "corridor") {
+    const corridorX = 30 + parcel.cy * 0.22;
+    return Math.abs(parcel.cx - corridorX) < 6 || parcel.cy > 95;
+  }
+  if (key === "public") {
+    return [
+      [60, 60],
+      [60, 20],
+      [100, 60],
+      [60, 100],
+      [20, 60],
+    ].some(([x, y]) => Math.hypot(parcel.cx - x, parcel.cy - y) < 7.5);
+  }
+  if (key === "character") return parcel.unit === "west";
+  if (key === "color") return parcel.unit === "north" || parcel.unit === "east";
+  if (key === "view") {
+    const expectedY = 104 - parcel.cx * 0.66;
+    return parcel.cx > 16 && parcel.cx < 104 && Math.abs(parcel.cy - expectedY) < 8;
+  }
+  return parcel.unit === "core";
+}
 
-  const width = 10 + (index % 4) * 3;
-  const height = 8 + (index % 3) * 3;
+function RoadNetwork({ showLabels }: { showLabels: boolean }) {
   return (
-    <g
-      className={`catalog-shape area-shape ${selected ? "selected" : ""}`}
-      onClick={onSelect}
-    >
-      <rect
-        x={Math.min(95 - width, x)}
-        y={Math.min(95 - height, y)}
-        width={width}
-        height={height}
-        rx="1"
-        fill={color}
-        stroke={color}
-      />
-      <text x={Math.min(95 - width, x) + 1.5} y={Math.min(95 - height, y) + 3}>
-        {item.id}
-      </text>
+    <g className="road-network" aria-label="四级道路网络">
+      {roads.map((road) => (
+        <path
+          key={`${road.id}-casing`}
+          d={road.path}
+          className={`road-casing road-${road.roadClass}`}
+          style={{ strokeWidth: roadWidths[road.roadClass].casing }}
+        />
+      ))}
+      {roads.map((road) => (
+        <path
+          key={`${road.id}-fill`}
+          d={road.path}
+          className={`road-fill road-${road.roadClass}`}
+          style={{ strokeWidth: roadWidths[road.roadClass].fill }}
+        />
+      ))}
+      {roads
+        .filter((road) => road.roadClass === "快速路" || road.roadClass === "主干路")
+        .map((road) => (
+          <path
+            key={`${road.id}-center`}
+            d={road.path}
+            className={`road-center road-${road.roadClass}`}
+          />
+        ))}
+      {showLabels &&
+        roads
+          .filter((road) => road.label)
+          .map((road) => {
+            const [x, y, rotation] = road.label!;
+            return (
+              <text
+                key={`${road.id}-label`}
+                x={x}
+                y={y}
+                transform={`rotate(${rotation} ${x} ${y})`}
+                className="road-label"
+              >
+                {road.name}
+              </text>
+            );
+          })}
     </g>
   );
 }
 
-function CatalogOverview() {
-  const [catalogLevel, setCatalogLevel] = useState<CatalogLevel>("unit");
-  const [selectedId, setSelectedId] = useState("U-02");
-  const [strategyTab, setStrategyTab] = useState<
-    "transmission" | "general" | "key"
-  >("transmission");
-  const items = elementCatalog[catalogLevel];
-  const selected =
-    items.find((item) => item.id === selectedId) ?? items[0];
-  const groupedItems = useMemo(() => {
-    return items.reduce(
-      (groups, item) => {
-        (groups[item.group] ??= []).push(item);
-        return groups;
-      },
-      {} as Record<string, CatalogItem[]>,
-    );
-  }, [items]);
-  const strategies =
-    strategyTab === "general"
-      ? generalControlStrategies
-      : strategyTab === "key"
-        ? keyControlStrategies
-        : transmissionStrategies;
+function BaseCity({
+  parcels,
+  item,
+  level,
+  selectedParcel,
+  setSelectedParcel,
+  showParcels,
+  showLandUse,
+  showRoadLabels,
+}: {
+  parcels: Parcel[];
+  item: CatalogItem;
+  level: CatalogLevel;
+  selectedParcel: Parcel | null;
+  setSelectedParcel: (parcel: Parcel) => void;
+  showParcels: boolean;
+  showLandUse: boolean;
+  showRoadLabels: boolean;
+}) {
+  return (
+    <>
+      <rect x="4" y="4" width="112" height="112" rx="1" className="city-ground" />
+      {units.map((unit) => (
+        <rect
+          key={`${unit.id}-wash`}
+          {...unit.bounds}
+          className={`unit-wash unit-${unit.id}`}
+          style={{ fill: unit.color }}
+        />
+      ))}
 
-  function switchCatalogLevel(next: CatalogLevel) {
-    setCatalogLevel(next);
-    setSelectedId(elementCatalog[next][0].id);
+      <path
+        d="M 7 104 C 34 96, 53 109, 79 101 C 94 96, 105 98, 114 93"
+        className="river-bank"
+      />
+      <path
+        d="M 7 104 C 34 96, 53 109, 79 101 C 94 96, 105 98, 114 93"
+        className="river"
+      />
+      <path d="M 8 96 C 36 90, 61 99, 112 88" className="regional-greenway" />
+
+      {showParcels &&
+        parcels.map((parcel) => {
+          const affected = level === "parcel" && isAffectedParcel(parcel, item);
+          const isSelected = selectedParcel?.id === parcel.id;
+          return (
+            <g
+              key={parcel.id}
+              className={`parcel-group ${affected ? "affected" : ""} ${
+                isSelected ? "selected" : ""
+              }`}
+              onClick={() => setSelectedParcel(parcel)}
+            >
+              <rect
+                x={parcel.x}
+                y={parcel.y}
+                width={parcel.width}
+                height={parcel.height}
+                fill={showLandUse ? landUseColors[parcel.landUse] : "#e8e7df"}
+                className="parcel-lot"
+                aria-label={`${parcel.id} · ${unitById[parcel.unit].name} · ${parcel.landUse}`}
+              />
+              <rect
+                x={parcel.x + parcel.width * 0.18}
+                y={parcel.y + parcel.height * 0.2}
+                width={parcel.width * 0.64}
+                height={parcel.height * 0.56}
+                className="building-footprint"
+              />
+            </g>
+          );
+        })}
+
+      <g className="civic-spaces">
+        <rect x="53.5" y="53.5" width="13" height="13" rx="1.5" className="central-plaza" />
+        <rect x="9" y="12" width="8" height="9" rx="1" className="district-park" />
+        <rect x="10" y="55" width="8" height="12" rx="1" className="district-park" />
+        <rect x="102" y="54" width="8" height="13" rx="1" className="district-park" />
+        <rect x="52" y="102" width="15" height="8" rx="1" className="district-park" />
+        <circle cx="60" cy="60" r="2.2" className="civic-node" />
+      </g>
+
+      <RoadNetwork showLabels={showRoadLabels} />
+
+      <g className="rapid-transit">
+        <path d="M 7 57.8 H 113" />
+        {[20, 36, 48, 60, 72, 84, 100].map((x) => (
+          <circle key={x} cx={x} cy="57.8" r="0.72" />
+        ))}
+        <text x="7" y="56.5">轨道交通1号线</text>
+      </g>
+
+      {units.map((unit) => (
+        <g key={`${unit.id}-boundary`} className={`unit-boundary unit-${unit.id}`}>
+          <rect {...unit.bounds} />
+          <text x={unit.label[0]} y={unit.label[1]}>{unit.name}</text>
+          <text x={unit.label[0]} y={unit.label[1] + 2.4}>{unit.role} · 120地块</text>
+        </g>
+      ))}
+    </>
+  );
+}
+
+function InterfaceMarker({ x, y, label }: { x: number; y: number; label: string }) {
+  return (
+    <g className="interface-marker">
+      <circle cx={x} cy={y} r="1.35" />
+      <circle cx={x} cy={y} r="0.42" />
+      <text x={x + 1.8} y={y - 1.3}>{label}</text>
+    </g>
+  );
+}
+
+function ElementOverlay({
+  item,
+  level,
+}: {
+  item: CatalogItem;
+  level: CatalogLevel;
+}) {
+  const key = profileKeyFor(item);
+  const color = groupColor(item.group);
+  const levelClass = `overlay-${level}`;
+
+  if (key === "boundary") {
+    return (
+      <g className={`element-overlay ${levelClass}`} style={{ color }}>
+        {level === "region" && <rect x="5" y="5" width="110" height="110" rx="1" />}
+        {level === "unit" &&
+          units.map((unit) => <rect key={unit.id} {...unit.bounds} />)}
+        {level === "parcel" && (
+          <>
+            <rect x="51.7" y="48.4" width="4" height="4.35" className="parcel-object-area" />
+            <rect x="60.2" y="62.8" width="3.5" height="4.2" className="parcel-object-area" />
+            <text x="52" y="47.2">调用现行地块边界</text>
+          </>
+        )}
+      </g>
+    );
+  }
+
+  if (key === "axis") {
+    return (
+      <g className={`element-overlay axis-overlay ${levelClass}`} style={{ color }}>
+        {level === "region" && (
+          <>
+            <path d="M 7 60 C 36 58, 79 62, 113 59" className="object-range-line" />
+            <path d="M 7 60 C 36 58, 79 62, 113 59" className="object-center-line" />
+            <circle cx="7" cy="60" r="1.4" />
+            <circle cx="113" cy="59" r="1.4" />
+            <text x="8.5" y="55.8">片区东西发展轴：整体结构 / 影响范围</text>
+          </>
+        )}
+        {level === "unit" && (
+          <>
+            {[
+              "M 7 60 C 18 59, 28 59, 36 59.5",
+              "M 36 59.5 C 49 59, 70 61.5, 84 60.3",
+              "M 84 60.3 C 95 60, 104 59.5, 113 59",
+            ].map((path, index) => (
+              <g key={path}>
+                <path d={path} className="object-range-line" />
+                <path d={path} className="object-center-line" />
+                <text x={[12, 52, 95][index]} y={[64.5, 65, 64.2][index]}>
+                  U-{["W", "C", "E"][index]}-AXIS
+                </text>
+              </g>
+            ))}
+            <InterfaceMarker x={36} y={59.5} label="IF-EW-01" />
+            <InterfaceMarker x={84} y={60.3} label="IF-EW-02" />
+          </>
+        )}
+        {level === "parcel" && (
+          <>
+            <path d="M 38 55.7 H 82" className="parcel-control-line" />
+            <path d="M 38 64.2 H 82" className="parcel-interface-line" />
+            {[43, 48, 54, 66, 72, 77].map((x) => (
+              <line key={x} x1={x} y1="54.8" x2={x} y2="65.2" className="parcel-link" />
+            ))}
+            <polygon points="60,48 58.6,51 61.4,51" className="high-point" />
+            <rect x="54" y="55" width="12" height="10" rx="1" className="parcel-open-space" />
+            <text x="38" y="52.8">控制线 · 连续界面 · 高点 · 开放空间 · 慢行接口</text>
+          </>
+        )}
+      </g>
+    );
+  }
+
+  if (key === "core" || key === "center" || key === "public") {
+    const points = [
+      [60, 60],
+      [60, 20],
+      [100, 60],
+      [60, 100],
+      [20, 60],
+    ];
+    return (
+      <g className={`element-overlay node-overlay ${levelClass}`} style={{ color }}>
+        {level === "region" && (
+          <>
+            <rect x="40" y="40" width="40" height="40" rx="7" className="object-area" />
+            {points.map(([x, y], index) => (
+              <g key={`${x}-${y}`}>
+                <circle cx={x} cy={y} r={index === 0 ? 8 : 5.2} className="object-range" />
+                <circle cx={x} cy={y} r="1.15" />
+              </g>
+            ))}
+            <text x="42" y="38">核心—中心—公共空间节点网络</text>
+          </>
+        )}
+        {level === "unit" &&
+          points.map(([x, y], index) => (
+            <g key={`${x}-${y}`}>
+              <circle cx={x} cy={y} r={index === 0 ? 6 : 4.3} className="object-range" />
+              <circle cx={x} cy={y} r="1" />
+              <text x={x + 1.8} y={y - 1.6}>U-{index + 1} 点+范围</text>
+            </g>
+          ))}
+        {level === "parcel" && (
+          <>
+            <rect x="53.5" y="53.5" width="13" height="13" rx="1.2" className="parcel-open-space" />
+            <circle cx="60" cy="60" r="1.35" />
+            {[54, 60, 66].map((x) => (
+              <circle key={x} cx={x} cy="67.2" r="0.7" className="parcel-entrance" />
+            ))}
+            <path d="M 48 60 H 72 M 60 48 V 72" className="parcel-link" />
+            <text x="52" y="50.5">边界 / 面积 / 首层开放 / 出入口 / 连接通道</text>
+          </>
+        )}
+      </g>
+    );
+  }
+
+  if (key === "wedge") {
+    return (
+      <g className={`element-overlay green-overlay ${levelClass}`} style={{ color }}>
+        <polygon
+          points={
+            level === "region"
+              ? "7,112 7,88 30,75 54,61 50,82 30,101"
+              : level === "unit"
+                ? "7,112 7,92 29,79 50,66 47,82 27,103"
+                : "7,112 7,97 29,83 46,72 43,85 27,104"
+          }
+          className={level === "parcel" ? "parcel-object-area" : "object-area"}
+        />
+        <path d="M 11 105 L 47 73" className="object-center-line" />
+        <text x="10" y="88">
+          {level === "parcel" ? "生态连续面 + 建设退让线" : "生态绿楔边界与有效宽度"}
+        </text>
+      </g>
+    );
+  }
+
+  if (key === "ring") {
+    return (
+      <g className={`element-overlay green-overlay ${levelClass}`} style={{ color }}>
+        <rect
+          x={level === "region" ? 34 : 37}
+          y={level === "region" ? 34 : 37}
+          width={level === "region" ? 52 : 46}
+          height={level === "region" ? 52 : 46}
+          rx="10"
+          className="object-range-line"
+        />
+        <rect x="39" y="39" width="42" height="42" rx="8" className="object-center-line" />
+        {level !== "region" && (
+          <>
+            <InterfaceMarker x={60} y={39} label="IF-GR-01" />
+            <InterfaceMarker x={81} y={60} label="IF-GR-02" />
+          </>
+        )}
+        {level === "parcel" && (
+          <>
+            {[46, 60, 74].map((x) => (
+              <circle key={x} cx={x} cy="39" r="0.72" className="parcel-entrance" />
+            ))}
+            <text x="40" y="35.5">绿道线位 + 有效宽度 + 出入口 + 接口</text>
+          </>
+        )}
+      </g>
+    );
+  }
+
+  if (key === "corridor") {
+    return (
+      <g className={`element-overlay green-overlay ${levelClass}`} style={{ color }}>
+        <path d="M 31 6 C 31 39, 42 72, 57 114" className="object-range-line corridor-range" />
+        <path d="M 31 6 C 31 39, 42 72, 57 114" className="object-center-line" />
+        {level !== "region" && (
+          <>
+            <InterfaceMarker x={38} y={36} label="IF-EC-01" />
+            <InterfaceMarker x={50} y={84} label="IF-EC-02" />
+          </>
+        )}
+        {level === "parcel" && (
+          <>
+            <path d="M 35 43 C 38 57, 44 74, 51 92" className="parcel-control-line" />
+            <text x="25" y="41">缓冲面 / 退让线 / 蓝绿连续 / 公共可达</text>
+          </>
+        )}
+      </g>
+    );
+  }
+
+  if (key === "character" || key === "color") {
+    return (
+      <g className={`element-overlay district-overlay ${levelClass}`} style={{ color }}>
+        {[
+          { x: 6, y: 37, width: 29, height: 46, label: key === "color" ? "暖灰主色区" : "历史风貌协调区" },
+          { x: 37, y: 37, width: 46, height: 46, label: key === "color" ? "中明度核心区" : "现代核心风貌区" },
+          { x: 85, y: 37, width: 29, height: 46, label: key === "color" ? "科技冷灰区" : "创新产业风貌区" },
+        ].map((zone) => (
+          <g key={zone.label}>
+            <rect {...zone} className="object-area" />
+            <text x={zone.x + 2} y={zone.y + 4}>{zone.label}</text>
+          </g>
+        ))}
+        {level === "parcel" && (
+          <>
+            <path d="M 7 54 H 35" className="parcel-interface-line" />
+            <path d="M 37 54 H 83" className="parcel-control-line" />
+            <text x="8" y="51">重点界面：屋顶 / 立面 / 材质 / 色卡 / 正负面</text>
+          </>
+        )}
+      </g>
+    );
+  }
+
+  if (key === "view") {
+    return (
+      <g className={`element-overlay view-overlay ${levelClass}`} style={{ color }}>
+        <polygon points="14,102 77,27 91,32" className="object-area" />
+        <path d="M 14 102 L 84 29" className="object-center-line" />
+        <circle cx="14" cy="102" r="1.5" />
+        <polygon points="84,24 81.5,31 86.5,31" className="landmark-point" />
+        <text x="16" y="105">VP-01 +45.00m</text>
+        <text x="78" y="22">景观标志点</text>
+        {level === "parcel" && (
+          <>
+            <path d="M 37 82 L 74 43" className="parcel-control-line" />
+            <text x="40" y="78">高度包络 / 视线退让 / 第五立面</text>
+          </>
+        )}
+      </g>
+    );
   }
 
   return (
-    <section className="catalog-overview">
-      <aside className="catalog-tree">
-        <div className="catalog-title">
-          <span>空间要素标准目录</span>
-          <small>共 70 类要素</small>
-        </div>
-        <div className="catalog-level-tabs">
-          {(Object.keys(catalogLevelMeta) as CatalogLevel[]).map((level) => (
-            <button
-              key={level}
-              className={catalogLevel === level ? "active" : ""}
-              onClick={() => switchCatalogLevel(level)}
-            >
-              <b>{catalogLevelMeta[level].count}</b>
-              <span>{catalogLevelMeta[level].name}</span>
-            </button>
-          ))}
-        </div>
-        <div className="catalog-database">
-          <span>{catalogLevelMeta[catalogLevel].database}</span>
-          <small>点、线、面分要素类组织</small>
-        </div>
-        <div className="catalog-groups">
-          {Object.entries(groupedItems).map(([group, groupItems]) => (
-            <div key={group} className="catalog-group">
-              <div className="catalog-group-heading">
-                <i style={{ background: groupColor(group) }} />
-                <span>{group}</span>
-                <b>{groupItems.length}</b>
-              </div>
-              {groupItems.map((item) => (
-                <button
-                  key={item.id}
-                  className={selected.id === item.id ? "active" : ""}
-                  onClick={() => setSelectedId(item.id)}
-                >
-                  <span>{item.id}</span>
-                  <b>{item.name}</b>
-                  <em>{item.geometry}</em>
-                </button>
-              ))}
-            </div>
-          ))}
-        </div>
-      </aside>
+    <g className={`element-overlay control-overlay ${levelClass}`} style={{ color }}>
+      {level === "region" && (
+        <>
+          <rect x="36" y="36" width="48" height="48" rx="2" className="candidate-zone" />
+          <text x="39" y="40">候选范围：研究状态，不直接管地块</text>
+        </>
+      )}
+      {level === "unit" && (
+        <>
+          <rect x="5" y="5" width="110" height="110" className="general-zone" />
+          <rect x="36" y="36" width="48" height="48" className="key-zone" />
+          <text x="39" y="40">一级重点控制区 · 唯一类型：重要发展区</text>
+          <text x="8" y="112">其余为一般控制区 · 完整覆盖 / 互不重叠</text>
+        </>
+      )}
+      {level === "parcel" && (
+        <>
+          <rect x="37" y="37" width="46" height="46" className="key-zone" />
+          <path d="M 38 55.8 H 82" className="parcel-control-line" />
+          <rect x="54" y="55" width="12" height="10" className="parcel-open-space" />
+          <text x="39" y="41">加载 K-50 重要发展区唯一强化规则包</text>
+        </>
+      )}
+    </g>
+  );
+}
 
-      <section className="catalog-map-panel">
-        <div className="catalog-map-toolbar">
-          <div>
-            <span>全要素空间表达</span>
-            <small>
-              当前显示 {catalogLevelMeta[catalogLevel].name}层 {items.length} 类标准要素
-            </small>
-          </div>
-          <div className="geometry-counts">
-            {(["点", "线", "面"] as const).map((geometry) => (
-              <span key={geometry}>
-                {geometry}{" "}
-                <b>{items.filter((item) => item.geometry === geometry).length}</b>
-              </span>
-            ))}
-          </div>
+function ParcelFigure({ item }: { item: CatalogItem }) {
+  const color = groupColor(item.group);
+  return (
+    <g className="parcel-figure" transform="translate(86 7)" style={{ color }}>
+      <rect x="0" y="0" width="27" height="24" rx="1.2" className="figure-paper" />
+      <text x="2" y="3.2">附加图则局部 · {item.id}</text>
+      <rect x="3" y="5.2" width="21" height="15.5" className="figure-parcel" />
+      <rect x="7" y="8" width="6" height="9" className="figure-building" />
+      <rect x="15" y="7" width="5" height="11" className="figure-building" />
+      {item.geometry === "点" ? (
+        <>
+          <circle cx="18" cy="15" r="1.35" className="figure-object-point" />
+          <circle cx="18" cy="15" r="2.6" className="figure-object-range" />
+        </>
+      ) : item.geometry === "线" ? (
+        <path d="M 4 18.5 H 23" className="figure-object-line" />
+      ) : (
+        <rect x="4.5" y="13" width="18" height="6.5" className="figure-object-area" />
+      )}
+      <circle cx="4.5" cy="18.5" r=".55" className="figure-entry" />
+      <text x="2" y="23">几何实体 + 属性 + 审查条款</text>
+    </g>
+  );
+}
+
+function ProfessionalMap({
+  parcels,
+  item,
+  level,
+  selectedParcel,
+  setSelectedParcel,
+  showParcels,
+  showLandUse,
+  showRoadLabels,
+}: {
+  parcels: Parcel[];
+  item: CatalogItem;
+  level: CatalogLevel;
+  selectedParcel: Parcel | null;
+  setSelectedParcel: (parcel: Parcel) => void;
+  showParcels: boolean;
+  showLandUse: boolean;
+  showRoadLabels: boolean;
+}) {
+  return (
+    <div className="map-frame">
+      <svg
+        viewBox="0 0 120 120"
+        className="professional-map"
+        aria-label="包含五个单元、600个地块和四级道路网络的假想城市"
+      >
+        <defs>
+          <pattern id="parcelHatch" width="2.4" height="2.4" patternUnits="userSpaceOnUse" patternTransform="rotate(35)">
+            <line x1="0" y1="0" x2="0" y2="2.4" className="hatch-line" />
+          </pattern>
+          <filter id="mapShadow" x="-10%" y="-10%" width="120%" height="120%">
+            <feDropShadow dx="0" dy=".55" stdDeviation=".55" floodOpacity=".16" />
+          </filter>
+        </defs>
+        <BaseCity
+          parcels={parcels}
+          item={item}
+          level={level}
+          selectedParcel={selectedParcel}
+          setSelectedParcel={setSelectedParcel}
+          showParcels={showParcels}
+          showLandUse={showLandUse}
+          showRoadLabels={showRoadLabels}
+        />
+        <ElementOverlay item={item} level={level} />
+        {level === "parcel" && <ParcelFigure item={item} />}
+        <rect x="4" y="4" width="112" height="112" rx="1" className="map-outline" />
+      </svg>
+      <div className="map-north" aria-hidden="true"><b>N</b><i /></div>
+      <div className="map-scale" aria-label="比例尺"><span /><small>0</small><small>500m</small><small>1km</small></div>
+    </div>
+  );
+}
+
+function LevelTree({
+  level,
+  setLevel,
+  selectedId,
+  selectItem,
+}: {
+  level: CatalogLevel;
+  setLevel: (level: CatalogLevel) => void;
+  selectedId: string;
+  selectItem: (item: CatalogItem) => void;
+}) {
+  const items = elementCatalog[level];
+  const groups = useMemo(
+    () =>
+      items.reduce<Record<string, CatalogItem[]>>((result, item) => {
+        (result[item.group] ??= []).push(item);
+        return result;
+      }, {}),
+    [items],
+  );
+
+  return (
+    <aside className="layer-panel">
+      <div className="panel-heading">
+        <div>
+          <span>标准空间要素</span>
+          <small>70类 · 点线面分层入库</small>
         </div>
-        <div className="catalog-map-wrap">
-          <svg
-            className="catalog-map"
-            viewBox="0 0 100 100"
-            aria-label={`${catalogLevelMeta[catalogLevel].name}层全部空间要素示意`}
+        <b>ALL</b>
+      </div>
+      <div className="level-tabs">
+        {levelOrder.map((levelId) => (
+          <button
+            key={levelId}
+            className={level === levelId ? "active" : ""}
+            onClick={() => setLevel(levelId)}
           >
-            <defs>
-              <pattern
-                id="catalogGrid"
-                width="4"
-                height="4"
-                patternUnits="userSpaceOnUse"
-              >
-                <path
-                  d="M 4 0 L 0 0 0 4"
-                  fill="none"
-                  stroke="#d9dad2"
-                  strokeWidth=".15"
-                />
-              </pattern>
-            </defs>
-            <rect x="1" y="1" width="98" height="98" rx="1" className="catalog-base" />
-            <rect x="1" y="1" width="98" height="98" fill="url(#catalogGrid)" />
-            {(Object.keys(unitMeta) as UnitId[]).map((unit) => (
-              <polygon
-                key={unit}
-                points={unitMeta[unit].polygon}
-                className="catalog-unit-context"
-              />
-            ))}
-            {items.map((item, index) => (
-              <CatalogShape
+            <b>{levelMeta[levelId].count}</b>
+            <span>{levelMeta[levelId].name}</span>
+            <small>{levelPrinciples[levelId].verb}</small>
+          </button>
+        ))}
+      </div>
+      <div className="database-card">
+        <span>{levelMeta[level].database}</span>
+        <small>{levelMeta[level].scale}</small>
+      </div>
+      <div className="element-groups">
+        {Object.entries(groups).map(([group, groupItems]) => (
+          <section key={group} className="element-group">
+            <div className="element-group-title">
+              <i style={{ background: groupColor(group) }} />
+              <span>{group}</span>
+              <b>{groupItems.length}</b>
+            </div>
+            {groupItems.map((item) => (
+              <button
                 key={item.id}
-                item={item}
-                index={index}
-                selected={selected.id === item.id}
-                onSelect={() => setSelectedId(item.id)}
-              />
+                className={selectedId === item.id ? "active" : ""}
+                onClick={() => selectItem(item)}
+              >
+                <span>{item.id}</span>
+                <b>{item.name}</b>
+                <em>{item.geometry}</em>
+              </button>
             ))}
-            <rect x="1" y="1" width="98" height="98" rx="1" className="catalog-outline" />
-          </svg>
-          <div className="catalog-map-legend">
-            {Object.keys(groupedItems).map((group) => (
-              <span key={group}>
-                <i style={{ background: groupColor(group) }} />
-                {group}
-              </span>
-            ))}
-          </div>
-        </div>
-        <div className="catalog-selection">
-          <div className="catalog-selection-code">
-            <span>{selected.id}</span>
-            <b>{selected.geometry}</b>
-          </div>
-          <div>
-            <small>{selected.group}</small>
-            <h2>{selected.name}</h2>
-            <p>{selected.content}</p>
-          </div>
-          <div className="catalog-transmission">
-            <span>逐级传导要求</span>
-            <p>{selected.transmission}</p>
-          </div>
-        </div>
-      </section>
+          </section>
+        ))}
+      </div>
+    </aside>
+  );
+}
 
-      <aside className="strategy-library">
-        <div className="catalog-title">
+function Inspector({
+  item,
+  level,
+  selectedParcel,
+}: {
+  item: CatalogItem;
+  level: CatalogLevel;
+  selectedParcel: Parcel | null;
+}) {
+  const profile = getChainProfile(item);
+  const stage = profile[level];
+  const principle = levelPrinciples[level];
+  return (
+    <aside className="inspector-panel">
+      <div className="inspector-kicker">
+        <span>当前对象 · {levelMeta[level].name}层</span>
+        <em>{item.geometry}对象</em>
+      </div>
+      <h2>{item.name}</h2>
+      <p className="object-id">{item.id} · {item.group}</p>
+
+      <div className="scale-role">
+        <b>{principle.verb}</b>
+        <div>
+          <span>{principle.question}</span>
+          <small>{principle.depth}</small>
+        </div>
+      </div>
+
+      <div className="inspector-section">
+        <span>本层空间对象</span>
+        <h3>{stage.object}</h3>
+        <p>{stage.responsibility}</p>
+      </div>
+
+      <div className="inspector-section">
+        <span>必备属性与证据</span>
+        <div className="evidence-list">
+          {stage.required.map((entry) => <i key={entry}>{entry}</i>)}
+        </div>
+      </div>
+
+      <div className="inspector-section output-section">
+        <span>成果深度</span>
+        <p>{stage.output}</p>
+      </div>
+
+      <div className="inspector-section">
+        <span>{level === "parcel" ? "直接来源" : "向下传导"}</span>
+        <p>{item.transmission}</p>
+      </div>
+
+      {selectedParcel && (
+        <div className="parcel-record">
+          <div>
+            <span>已选地块</span>
+            <b>{selectedParcel.id}</b>
+          </div>
+          <dl>
+            <div><dt>所属单元</dt><dd>{unitById[selectedParcel.unit].name}</dd></div>
+            <div><dt>用地</dt><dd>{selectedParcel.landUse}</dd></div>
+            <div><dt>适用判定</dt><dd>{isAffectedParcel(selectedParcel, item) ? "适用" : "不适用"}</dd></div>
+            <div><dt>规则包</dt><dd>{selectedParcel.unit === "core" ? "K-50 重点" : "一般8项矩阵"}</dd></div>
+          </dl>
+        </div>
+      )}
+
+      <div className="value-warning">
+        <b>数值边界</b>
+        <p>本MVP只演示对象、条件和审查链。具体控制值必须来自批准成果、现行导则或经审查确认的研究结论。</p>
+      </div>
+    </aside>
+  );
+}
+
+function ScaleLadder({
+  item,
+  level,
+  setLevel,
+}: {
+  item: CatalogItem;
+  level: CatalogLevel;
+  setLevel: (level: CatalogLevel) => void;
+}) {
+  const profile = getChainProfile(item);
+  return (
+    <section className="scale-ladder">
+      <div className="ladder-heading">
+        <div>
+          <span>专业传导剖面</span>
+          <h2>{profile.title}</h2>
+        </div>
+        <p>{profile.thesis}</p>
+      </div>
+      <div className="ladder-flow">
+        {levelOrder.map((levelId, index) => {
+          const stage = profile[levelId];
+          return (
+            <div className="ladder-segment" key={levelId}>
+              <button
+                className={`ladder-card ${level === levelId ? "active" : ""}`}
+                onClick={() => setLevel(levelId)}
+              >
+                <div>
+                  <span>0{index + 1} · {levelMeta[levelId].name}</span>
+                  <b>{levelPrinciples[levelId].verb}</b>
+                </div>
+                <h3>{stage.object}</h3>
+                <p>{stage.responsibility}</p>
+                <small>{stage.output}</small>
+              </button>
+              {index < 2 && (
+                <div className="ladder-arrow">
+                  <span>{index === 0 ? "分解 / 继承 / 深化" : "适用性 + 规则转译"}</span>
+                  <b>→</b>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      <div className="rule-evidence">
+        <div><span>空间关系</span><b>{profile.relation}</b></div>
+        <div><span>规则触发</span><b>{profile.trigger}</b></div>
+        <div><span>合并 / 冲突</span><b>{profile.mergeRule}</b></div>
+      </div>
+      <div className="translation-pipeline">
+        {["空间叠加", "规则触发", "要求生成", "同类合并", "冲突复核", "图则关联"].map(
+          (step, index) => (
+            <span key={step}><b>{index + 1}</b>{step}</span>
+          ),
+        )}
+      </div>
+    </section>
+  );
+}
+
+function StrategyLibrary() {
+  const [tab, setTab] = useState<"transmission" | "general" | "key">("transmission");
+  const strategies =
+    tab === "general"
+      ? generalControlStrategies
+      : tab === "key"
+        ? keyControlStrategies
+        : transmissionStrategies;
+  return (
+    <section className="strategy-library">
+      <div className="strategy-heading">
+        <div>
           <span>控制策略库</span>
-          <small>完整规则集</small>
+          <h2>传导方式、一般8项、重点5类</h2>
         </div>
         <div className="strategy-tabs">
-          <button
-            className={strategyTab === "transmission" ? "active" : ""}
-            onClick={() => setStrategyTab("transmission")}
-          >
-            传导方式 <b>10</b>
-          </button>
-          <button
-            className={strategyTab === "general" ? "active" : ""}
-            onClick={() => setStrategyTab("general")}
-          >
-            一般控制 <b>8</b>
-          </button>
-          <button
-            className={strategyTab === "key" ? "active" : ""}
-            onClick={() => setStrategyTab("key")}
-          >
-            重点控制 <b>5</b>
-          </button>
+          <button className={tab === "transmission" ? "active" : ""} onClick={() => setTab("transmission")}>传导 10</button>
+          <button className={tab === "general" ? "active" : ""} onClick={() => setTab("general")}>一般 8</button>
+          <button className={tab === "key" ? "active" : ""} onClick={() => setTab("key")}>重点 5</button>
         </div>
-        <div className="control-nature">
-          <span>控制性质</span>
-          <b>刚性</b>
-          <b>弹性</b>
-          <b>引导</b>
+      </div>
+      <div className="strategy-cards">
+        {strategies.map((strategy) => (
+          <article key={strategy.id}>
+            <span>{strategy.id}</span>
+            <h3>{strategy.name}</h3>
+            <dl>
+              <div><dt>适用判定</dt><dd>{strategy.condition}</dd></div>
+              <div><dt>图则表达</dt><dd>{strategy.expression}</dd></div>
+              <div><dt>记录要求</dt><dd>{strategy.requirement}</dd></div>
+            </dl>
+          </article>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function QualityGate() {
+  return (
+    <section className="quality-gate">
+      <div className="quality-heading">
+        <div>
+          <span>任务质量门禁</span>
+          <h2>每轮任务均需通过六项审查</h2>
         </div>
-        <div className="strategy-list">
-          {strategies.map((strategy) => (
-            <details key={strategy.id} open={strategies[0].id === strategy.id}>
-              <summary>
-                <span>{strategy.id}</span>
-                <b>{strategy.name}</b>
-                <i>＋</i>
-              </summary>
-              <div>
-                <small>适用/触发条件</small>
-                <p>{strategy.condition}</p>
-                <small>成果表达</small>
-                <p>{strategy.expression}</p>
-                <small>控制或记录要求</small>
-                <p>{strategy.requirement}</p>
-              </div>
-            </details>
-          ))}
-        </div>
-        <div className="strategy-footnote">
-          <b>规则约束</b>
-          <span>重点控制区只能确定一种重点控制类型；具体控制值不得由入库人员自行设定。</span>
-        </div>
-      </aside>
+        <b>6 / 6</b>
+      </div>
+      <div className="quality-list">
+        {reviewChecklist.map((item) => (
+          <article key={item.id}>
+            <i>✓</i>
+            <div>
+              <span>{item.id} · {item.name}</span>
+              <p>{item.criterion}</p>
+            </div>
+            <b>通过</b>
+          </article>
+        ))}
+      </div>
+      <p className="quality-note">审查顺序：数据完整性 → 传导逻辑 → 空间表达 → 交互可读性 → 构建验证 → 线上复核。任一项不通过则不发布。</p>
     </section>
   );
 }
 
 export default function Home() {
-  const parcels = useMemo<Parcel[]>(() => {
-    return Array.from({ length: GRID * GRID }, (_, index) => {
-      const ix = index % GRID;
-      const iy = Math.floor(index / GRID);
-      const unit = assignUnit(ix, iy);
-      return {
-        id: `${unitMeta[unit].short}-${String(index + 1).padStart(3, "0")}`,
-        index,
-        x: ix * CELL,
-        y: iy * CELL,
-        cx: ix * CELL + CELL / 2,
-        cy: iy * CELL + CELL / 2,
-        unit,
-      };
-    });
-  }, []);
-
-  const [feature, setFeature] = useState<FeatureId>("axis");
-  const [viewMode, setViewMode] = useState<"transmission" | "catalog">(
-    "catalog",
-  );
-  const [level, setLevel] = useState<Level>("region");
+  const parcels = useMemo(() => generateParcels(), []);
+  const [level, setLevel] = useState<CatalogLevel>("unit");
+  const [selectedIds, setSelectedIds] = useState<Record<CatalogLevel, string>>({
+    region: "R-03",
+    unit: "U-03",
+    parcel: "P-15",
+  });
   const [selectedParcel, setSelectedParcel] = useState<Parcel | null>(null);
-  const [selectedUnit, setSelectedUnit] = useState<UnitId | null>(null);
+  const [showParcels, setShowParcels] = useState(true);
+  const [showLandUse, setShowLandUse] = useState(true);
+  const [showRoadLabels, setShowRoadLabels] = useState(true);
 
-  const applicableParcels = useMemo(
-    () => parcels.filter((parcel) => appliesToParcel(parcel, feature)),
-    [parcels, feature],
-  );
-  const applicableIds = useMemo(
-    () => new Set(applicableParcels.map((parcel) => parcel.id)),
-    [applicableParcels],
-  );
-  const affectedUnits = useMemo(
-    () =>
-      (Object.keys(unitMeta) as UnitId[]).filter((unit) =>
-        applicableParcels.some((parcel) => parcel.unit === unit),
-      ),
-    [applicableParcels],
-  );
-  const unitCounts = useMemo(() => {
-    return (Object.keys(unitMeta) as UnitId[]).reduce(
-      (acc, unit) => {
-        acc[unit] = parcels.filter((parcel) => parcel.unit === unit).length;
-        return acc;
-      },
-      {} as Record<UnitId, number>,
-    );
-  }, [parcels]);
-  const visibleFeaturesForParcel = selectedParcel
-    ? featureOrder.filter((id) => appliesToParcel(selectedParcel, id))
-    : [];
-  const meta = featureMeta[feature];
-  const stage = stageMeta[level];
-  const currentUnit =
-    selectedParcel?.unit ??
-    selectedUnit ??
-    (affectedUnits.length === 1 ? affectedUnits[0] : null);
-  const currentUnitAffected =
-    currentUnit !== null && affectedUnits.includes(currentUnit);
+  const items = elementCatalog[level];
+  const selectedItem =
+    items.find((item) => item.id === selectedIds[level]) ?? items[0];
+  const affectedCount = parcels.filter((parcel) => isAffectedParcel(parcel, selectedItem)).length;
 
-  function chooseFeature(id: FeatureId) {
-    setFeature(id);
-    setSelectedParcel(null);
-    setSelectedUnit(null);
-    setLevel("region");
-  }
-
-  function chooseLevel(next: Level) {
+  function chooseLevel(next: CatalogLevel) {
     setLevel(next);
-    if (next !== "parcel") setSelectedParcel(null);
-  }
-
-  function chooseUnit(id: UnitId) {
-    setSelectedUnit(id);
     setSelectedParcel(null);
-    setLevel("unit");
   }
 
-  function chooseParcel(parcel: Parcel) {
-    setSelectedParcel(parcel);
-    setSelectedUnit(parcel.unit);
-    setLevel("parcel");
+  function selectItem(item: CatalogItem) {
+    setSelectedIds((current) => ({ ...current, [level]: item.id }));
+    setSelectedParcel(null);
   }
-
-  const stageCount =
-    level === "region"
-      ? 1
-      : level === "unit"
-        ? affectedUnits.length
-        : applicableParcels.length;
 
   return (
-    <main
-      className={`app-shell ${viewMode === "catalog" ? "catalog-mode" : ""}`}
-    >
+    <main className="professional-shell">
       <header className="topbar">
         <div className="brand">
-          <span className="brand-mark">西安·城市设计</span>
-          <span className="brand-divider" />
+          <span>XI&apos;AN URBAN DESIGN LAB</span>
           <div>
-            <h1>空间对象逐级传导实验台</h1>
-            <p>片区对象 → 单元对象 → 适用性判定 → 地块管控要求</p>
+            <h1>城市设计空间对象识别与落位</h1>
+            <p>片区统筹 → 单元落实 → 地块规则转译</p>
           </div>
         </div>
-        <div className="topbar-actions">
-          <div className="view-switch">
-            <button
-              className={viewMode === "transmission" ? "active" : ""}
-              onClick={() => setViewMode("transmission")}
-            >
-              逐级传导
-            </button>
-            <button
-              className={viewMode === "catalog" ? "active" : ""}
-              onClick={() => setViewMode("catalog")}
-            >
-              全要素与策略
-            </button>
-          </div>
-          <span className="scenario-dot" />
-          <span>数据模型 v0.3</span>
-          <span className="no-skip-badge">禁止跨级传导</span>
-          <button
-            className="reset-button"
-            onClick={() => {
-              setFeature("axis");
-              setLevel("region");
-              setSelectedParcel(null);
-              setSelectedUnit(null);
-            }}
-          >
-            重置
-          </button>
+        <div className="topbar-status">
+          <span>专业假想城 · 非现状法定图</span>
+          <b><i /> 质量门禁通过</b>
         </div>
       </header>
 
-      {viewMode === "catalog" ? (
-        <CatalogOverview />
-      ) : (
-        <>
-          <section className="workspace">
-        <aside className="left-panel">
-          <div className="panel-heading">
-            <span>片区成果对象</span>
-            <small>示例 5 项</small>
-          </div>
-          <div className="feature-list">
-            {featureOrder.map((id, index) => {
-              const item = featureMeta[id];
-              return (
-                <button
-                  key={id}
-                  className={`feature-item ${feature === id ? "active" : ""}`}
-                  onClick={() => chooseFeature(id)}
-                >
-                  <span
-                    className="feature-swatch"
-                    style={{ background: item.color }}
-                  >
-                    {String(index + 1).padStart(2, "0")}
-                  </span>
-                  <span>
-                    <em>{item.category}</em>
-                    <strong>{item.region.name}</strong>
-                    <small>{item.region.geometry}</small>
-                  </span>
-                </button>
-              );
-            })}
-          </div>
+      <section className="metric-ribbon">
+        <div><span>城市底图</span><b>四级路网</b><small>快速路 / 主干路 / 次干路 / 支路</small></div>
+        <div><span>规划单元</span><b>5</b><small>中央核心单元 1 个</small></div>
+        <div><span>现行地块</span><b>600</b><small>每单元 120 个</small></div>
+        <div><span>标准要素</span><b>20 / 21 / 29</b><small>片区 / 单元 / 地块</small></div>
+        <div><span>当前适用</span><b>{affectedCount}</b><small>基于空间关系动态判定</small></div>
+      </section>
 
-          <div className="stage-rail">
-            <div className="panel-heading compact">
-              <span>数据传导阶段</span>
-              <small>不可跳级</small>
-            </div>
-            {(Object.keys(stageMeta) as Level[]).map((id, index) => (
-              <button
-                key={id}
-                className={`stage-rail-item ${level === id ? "active" : ""}`}
-                onClick={() => chooseLevel(id)}
-              >
-                <b>{stageMeta[id].number}</b>
-                <span>
-                  <strong>{stageMeta[id].name}</strong>
-                  <small>{stageMeta[id].database}</small>
-                </span>
-                {index < 2 && <i>↓</i>}
-              </button>
-            ))}
-          </div>
+      <section className="studio-grid">
+        <LevelTree
+          level={level}
+          setLevel={chooseLevel}
+          selectedId={selectedItem.id}
+          selectItem={selectItem}
+        />
 
-          <div className="legend-note">
-            <span className="pulse-ring" />
-            <p>
-              同一种颜色不代表同一个对象。每一级都生成独立编号，并在下位对象中记录直接来源。
-            </p>
-          </div>
-        </aside>
-
-        <section className="map-stage">
+        <section className="map-panel">
           <div className="map-toolbar">
-            <div className="level-switch" aria-label="空间数据层级">
-              {(Object.keys(stageMeta) as Level[]).map((id) => (
-                <button
-                  key={id}
-                  className={level === id ? "active" : ""}
-                  onClick={() => chooseLevel(id)}
-                >
-                  {stageMeta[id].number} {id === "parcel" ? "地块" : id === "unit" ? "单元" : "片区"}
-                </button>
+            <div>
+              <span>{levelMeta[level].name}层工作图</span>
+              <h2>{selectedItem.id} · {selectedItem.name}</h2>
+              <small>{selectedItem.content}</small>
+            </div>
+            <div className="map-toggles" aria-label="地图图层开关">
+              <button className={showParcels ? "active" : ""} onClick={() => setShowParcels((value) => !value)}>地块</button>
+              <button className={showLandUse ? "active" : ""} onClick={() => setShowLandUse((value) => !value)}>用地底色</button>
+              <button className={showRoadLabels ? "active" : ""} onClick={() => setShowRoadLabels((value) => !value)}>路名</button>
+            </div>
+          </div>
+
+          <ProfessionalMap
+            parcels={parcels}
+            item={selectedItem}
+            level={level}
+            selectedParcel={selectedParcel}
+            setSelectedParcel={setSelectedParcel}
+            showParcels={showParcels}
+            showLandUse={showLandUse}
+            showRoadLabels={showRoadLabels}
+          />
+
+          <div className="map-legend">
+            <div className="road-legend">
+              <span>道路等级</span>
+              {(["快速路", "主干路", "次干路", "支路"] as RoadClass[]).map((roadClass) => (
+                <i key={roadClass} className={`legend-${roadClass}`}>{roadClass}</i>
+              ))}
+              <i className="legend-transit">轨道交通</i>
+            </div>
+            <div className="landuse-legend">
+              <span>用地底色</span>
+              {Object.entries(landUseColors).map(([name, color]) => (
+                <i key={name}><b style={{ background: color }} />{name}</i>
               ))}
             </div>
-            <div className="map-stage-title">
-              <span>{stage.name}</span>
-              <small>{stage.explanation}</small>
-            </div>
-            <div className="map-metrics">
-              <span>
-                本级记录 <b>{stageCount}</b>
-              </span>
-              <span>
-                下位去向 <b>{level === "parcel" ? "图则" : level === "unit" ? applicableParcels.length : affectedUnits.length}</b>
-              </span>
-            </div>
-          </div>
-
-          <div className="map-wrap">
-            <div className="map-caption">
-              <span>{stage.database}</span>
-              <small>
-                {meta.region.id} · {meta.region.name}
-              </small>
-            </div>
-            <svg
-              className="city-map"
-              viewBox="-4 -4 108 108"
-              role="img"
-              aria-label="片区、单元和地块三级空间对象逐级传导示意图"
-            >
-              <defs>
-                <pattern
-                  id="minorGrid"
-                  width="4"
-                  height="4"
-                  patternUnits="userSpaceOnUse"
-                >
-                  <path
-                    d="M 4 0 L 0 0 0 4"
-                    fill="none"
-                    stroke="#d8d8cf"
-                    strokeWidth=".12"
-                  />
-                </pattern>
-                <pattern
-                  id="requirementHatch"
-                  width="1.5"
-                  height="1.5"
-                  patternUnits="userSpaceOnUse"
-                  patternTransform="rotate(45)"
-                >
-                  <line
-                    x1="0"
-                    y1="0"
-                    x2="0"
-                    y2="1.5"
-                    stroke={meta.color}
-                    strokeWidth=".35"
-                  />
-                </pattern>
-                {(Object.keys(unitMeta) as UnitId[]).map((id) => (
-                  <clipPath key={id} id={`clip-${id}`}>
-                    <polygon points={unitMeta[id].polygon} />
-                  </clipPath>
-                ))}
-              </defs>
-
-              <rect
-                x="0"
-                y="0"
-                width="100"
-                height="100"
-                rx="1"
-                className="city-base"
-              />
-              <rect
-                x="0"
-                y="0"
-                width="100"
-                height="100"
-                fill="url(#minorGrid)"
-              />
-
-              {level === "parcel" &&
-                parcels.map((parcel) => {
-                  const applicable = applicableIds.has(parcel.id);
-                  const selected = selectedParcel?.id === parcel.id;
-                  return (
-                    <rect
-                      key={parcel.id}
-                      x={parcel.x + 0.24}
-                      y={parcel.y + 0.24}
-                      width={CELL - 0.48}
-                      height={CELL - 0.48}
-                      className={[
-                        "parcel",
-                        applicable ? "applicable" : "",
-                        selected ? "selected" : "",
-                      ].join(" ")}
-                      style={
-                        applicable
-                          ? {
-                              fill: "url(#requirementHatch)",
-                              stroke: meta.color,
-                            }
-                          : undefined
-                      }
-                      onClick={() => chooseParcel(parcel)}
-                    />
-                  );
-                })}
-
-              {level !== "parcel" &&
-                (Object.keys(unitMeta) as UnitId[]).map((id) => (
-                  <polygon
-                    key={id}
-                    points={unitMeta[id].polygon}
-                    className={[
-                      "unit-fill",
-                      level === "region" ? "context" : "",
-                      affectedUnits.includes(id) ? "affected" : "",
-                      selectedUnit === id ? "selected" : "",
-                    ].join(" ")}
-                    style={{ fill: unitMeta[id].color }}
-                    onClick={() => chooseUnit(id)}
-                  />
-                ))}
-
-              {level === "region" && (
-                <g className="region-object">
-                  <FeatureGeometry feature={feature} mode="region" />
-                </g>
-              )}
-
-              {level === "unit" && (
-                <g className="unit-objects">
-                  {affectedUnits.map((unit) => (
-                    <g key={unit} clipPath={`url(#clip-${unit})`}>
-                      <FeatureGeometry feature={feature} mode="unit-context" />
-                    </g>
-                  ))}
-                  {(feature === "axis" || feature === "corridor") && (
-                    <g className="interface-markers">
-                      {(feature === "axis"
-                        ? [
-                            [28, 49.2],
-                            [72, 52.3],
-                          ]
-                        : [
-                            [32, 28],
-                            [41, 72],
-                          ]
-                      ).map(([x, y], index) => (
-                        <g key={`${x}-${y}`}>
-                          <circle
-                            cx={x}
-                            cy={y}
-                            r="1.4"
-                            style={{ fill: meta.color }}
-                          />
-                          <text x={x + 2} y={y - 1}>
-                            IF-{index + 1}
-                          </text>
-                        </g>
-                      ))}
-                    </g>
-                  )}
-                </g>
-              )}
-
-              {level === "parcel" && (
-                <g className="parcel-source-context">
-                  {affectedUnits.map((unit) => (
-                    <g key={unit} clipPath={`url(#clip-${unit})`}>
-                      <FeatureGeometry feature={feature} mode="parcel-context" />
-                    </g>
-                  ))}
-                </g>
-              )}
-
-              {(Object.keys(unitMeta) as UnitId[]).map((id) => {
-                const positions: Record<UnitId, [number, number]> = {
-                  north: [50, 13],
-                  east: [85, 50],
-                  south: [50, 89],
-                  west: [9, 50],
-                  core: [50, 42],
-                };
-                const [x, y] = positions[id];
-                const isAffected = affectedUnits.includes(id);
-                return (
-                  <g
-                    key={`label-${id}`}
-                    className={`unit-label ${id === "core" ? "core-label" : ""}`}
-                    onClick={() => chooseUnit(id)}
-                  >
-                    <text x={x} y={y} textAnchor="middle">
-                      {level === "unit" && isAffected
-                        ? unitObjectId(feature, id)
-                        : unitMeta[id].name}
-                    </text>
-                    <text x={x} y={y + 3.4} textAnchor="middle">
-                      {level === "unit" && isAffected
-                        ? `来源 ${meta.region.id}`
-                        : `${unitCounts[id]} 地块`}
-                    </text>
-                  </g>
-                );
-              })}
-
-              {level === "parcel" && (
-                <g className="parcel-level-note">
-                  <rect x="2" y="2" width="31" height="8" rx="1" />
-                  <text x="4" y="5.4">
-                    斜线 = 规则适用地块
-                  </text>
-                  <text x="4" y="8.3">
-                    高亮不是复制单元对象
-                  </text>
-                </g>
-              )}
-
-              <rect
-                x="0"
-                y="0"
-                width="100"
-                height="100"
-                rx="1"
-                className="city-outline"
-              />
-            </svg>
-
-            <div className="north-arrow" aria-hidden="true">
-              <span>N</span>
-              <i />
-            </div>
-            <div className="scale-bar">
-              <span />
-              <small>0</small>
-              <small>500m</small>
-              <small>1000m</small>
-            </div>
+            <p>彩色控制对象为当前所选要素；斜线地块表示规则适用，不代表复制单元对象。</p>
           </div>
         </section>
 
-        <aside className="right-panel">
-          <div className="inspector-kicker">
-            {selectedParcel
-              ? "地块关系记录"
-              : currentUnit && level === "unit"
-                ? "单元对象属性"
-                : level === "parcel"
-                  ? "转译规则"
-                  : level === "unit"
-                    ? "单元成果对象"
-                    : "片区对象属性"}
-          </div>
-
-          {selectedParcel ? (
-            <>
-              <h2>地块 {selectedParcel.id}</h2>
-              <p className="object-code">{requirementId(feature, selectedParcel)}</p>
-              <div className="fact-grid">
-                <div>
-                  <span>来源单元对象编号</span>
-                  <b>{unitObjectId(feature, selectedParcel.unit)}</b>
-                </div>
-                <div>
-                  <span>转译规则</span>
-                  <b>{meta.translation.id}</b>
-                </div>
-                <div>
-                  <span>适用性判定</span>
-                  <b>
-                    {appliesToParcel(selectedParcel, feature)
-                      ? "适用"
-                      : "不适用"}
-                  </b>
-                </div>
-                <div>
-                  <span>控制分区</span>
-                  <b>
-                    {selectedParcel.unit === "core"
-                      ? "重点控制区"
-                      : "一般控制区"}
-                  </b>
-                </div>
-              </div>
-              <div className="section-title">逐级来源</div>
-              <div className="source-stack">
-                <div>
-                  <span>片区</span>
-                  <b>{meta.region.id}</b>
-                  <small>{meta.region.name}</small>
-                </div>
-                <i>↓</i>
-                <div>
-                  <span>单元</span>
-                  <b>{unitObjectId(feature, selectedParcel.unit)}</b>
-                  <small>{meta.unit.mode}</small>
-                </div>
-                <i>↓</i>
-                <div>
-                  <span>地块要求</span>
-                  <b>{requirementId(feature, selectedParcel)}</b>
-                  <small>{meta.translation.expression}</small>
-                </div>
-              </div>
-              <div className="section-title">生成的管控目标</div>
-              <div className="target-tags">
-                {meta.translation.targets.map((target) => (
-                  <span key={target}>{target}</span>
-                ))}
-              </div>
-              <div className="rule-card accent">
-                <span>审查方法</span>
-                <p>{meta.translation.review}</p>
-              </div>
-            </>
-          ) : currentUnit && level === "unit" ? (
-            <>
-              <h2>{meta.unit.name}</h2>
-              <p className="object-code">
-                {currentUnitAffected
-                  ? unitObjectId(feature, currentUnit)
-                  : "本单元不适用"}
-              </p>
-              <div className="fact-grid">
-                <div>
-                  <span>单元编号</span>
-                  <b>UNIT-{unitMeta[currentUnit].short}-01</b>
-                </div>
-                <div>
-                  <span>来源片区对象编号</span>
-                  <b>{currentUnitAffected ? meta.region.id : "—"}</b>
-                </div>
-                <div>
-                  <span>传导方式</span>
-                  <b>{currentUnitAffected ? meta.unit.mode : "不适用"}</b>
-                </div>
-                <div>
-                  <span>接口编号</span>
-                  <b>
-                    {currentUnitAffected
-                      ? meta.unit.interfaceId ?? "无跨界接口"
-                      : "—"}
-                  </b>
-                </div>
-              </div>
-              <div className="section-title">地块深化要求</div>
-              <div className="rule-card accent">
-                <span>下位去向</span>
-                <p>
-                  {currentUnitAffected
-                    ? meta.unit.parcelDeepening
-                    : `该片区对象未传导至${unitMeta[currentUnit].name}，记录处置结果为“不适用”。`}
-                </p>
-              </div>
-              {feature === "control" && currentUnit === "core" && (
-                <div className="state-change">
-                  <span>研究状态</span>
-                  <i>→</i>
-                  <span>单元确认</span>
-                  <i>→</i>
-                  <b>现行管控</b>
-                </div>
-              )}
-            </>
-          ) : level === "region" ? (
-            <>
-              <h2>{meta.region.name}</h2>
-              <p className="object-code">{meta.region.id}</p>
-              <div className="fact-grid">
-                <div>
-                  <span>几何表达</span>
-                  <b>{meta.region.geometry}</b>
-                </div>
-                <div>
-                  <span>数据状态</span>
-                  <b>{meta.region.status}</b>
-                </div>
-                <div>
-                  <span>控制性质</span>
-                  <b>{meta.region.controlNature}</b>
-                </div>
-                <div>
-                  <span>目标单元</span>
-                  <b>{affectedUnits.length} / 5</b>
-                </div>
-              </div>
-              <div className="section-title">单元深化要求</div>
-              <div className="rule-card">
-                <span>片区向下传导清单</span>
-                <p>{meta.region.unitDeepening}</p>
-              </div>
-              <div className="record-list">
-                {affectedUnits.map((unit) => (
-                  <button key={unit} onClick={() => chooseUnit(unit)}>
-                    <i style={{ background: unitMeta[unit].color }} />
-                    <span>
-                      <b>{unitMeta[unit].name}</b>
-                      <small>{meta.unit.mode}</small>
-                    </span>
-                    <strong>生成对象</strong>
-                  </button>
-                ))}
-              </div>
-              {feature === "control" && (
-                <div className="warning-card">
-                  片区候选范围仅进入研究成果库；必须经单元确认后才能进入现行管控。
-                </div>
-              )}
-            </>
-          ) : level === "unit" ? (
-            <>
-              <h2>{affectedUnits.length} 个单元对象</h2>
-              <p className="object-code">
-                每个对象均填写来源 {meta.region.id}
-              </p>
-              <div className="record-list large">
-                {affectedUnits.map((unit) => (
-                  <button key={unit} onClick={() => chooseUnit(unit)}>
-                    <i style={{ background: unitMeta[unit].color }} />
-                    <span>
-                      <b>{unitObjectId(feature, unit)}</b>
-                      <small>
-                        {unitMeta[unit].name} · {meta.unit.mode}
-                      </small>
-                    </span>
-                    <strong>
-                      {
-                        applicableParcels.filter(
-                          (parcel) => parcel.unit === unit,
-                        ).length
-                      }{" "}
-                      地块
-                    </strong>
-                  </button>
-                ))}
-              </div>
-            </>
-          ) : (
-            <>
-              <h2>地块适用性与规则转译</h2>
-              <p className="object-code">{meta.translation.id}</p>
-              <div className="translation-steps">
-                {[
-                  "空间叠加",
-                  "规则触发",
-                  "要求生成",
-                  "同类合并",
-                  "冲突复核",
-                  "图则关联",
-                ].map((text, index) => (
-                  <span key={text}>
-                    <b>{index + 1}</b>
-                    {text}
-                  </span>
-                ))}
-              </div>
-              <div className="section-title">规则定义</div>
-              <div className="rule-card">
-                <span>空间关系</span>
-                <p>{meta.translation.relation}</p>
-              </div>
-              <div className="rule-card">
-                <span>触发条件</span>
-                <p>{meta.translation.trigger}</p>
-              </div>
-              <div className="rule-card accent">
-                <span>成果表达</span>
-                <p>{meta.translation.expression}</p>
-              </div>
-              <div className="status-card">
-                <div>
-                  <span className="status-icon">✓</span>
-                  <span>
-                    <b>{applicableParcels.length} 条适用性记录</b>
-                    <small>每条均关联单元对象、规则、地块和地块要求</small>
-                  </span>
-                </div>
-                <span className="status-pill">可追溯</span>
-              </div>
-            </>
-          )}
-
-          {selectedParcel && visibleFeaturesForParcel.length > 1 && (
-            <>
-              <div className="section-title">该地块的其他来源</div>
-              <div className="applied-rules">
-                {visibleFeaturesForParcel
-                  .filter((id) => id !== feature)
-                  .map((id) => (
-                    <button key={id} onClick={() => chooseFeature(id)}>
-                      <i style={{ background: featureMeta[id].color }} />
-                      <span>{featureMeta[id].region.name}</span>
-                      <b>追溯</b>
-                    </button>
-                  ))}
-              </div>
-            </>
-          )}
-        </aside>
+        <Inspector item={selectedItem} level={level} selectedParcel={selectedParcel} />
       </section>
 
-          <section className="lineage-panel">
-        <div className="lineage-title">
-          <span>逐级数据链</span>
-          <small>下位记录只保存直接上一级对象编号，不跨层混存。</small>
-        </div>
-        <div className="lineage-flow four-stage">
-          <button
-            className={`lineage-step ${level === "region" ? "active" : ""}`}
-            onClick={() => chooseLevel("region")}
-          >
-            <span>01 · 片区空间对象</span>
-            <i style={{ background: meta.color }} />
-            <div>
-              <b>{meta.region.id}</b>
-              <small>{meta.region.name}</small>
-            </div>
-            <em>{meta.region.status}</em>
-          </button>
-          <div className="flow-arrow compact-arrow">
-            <span>{meta.unit.mode}</span>
-            <i>→</i>
-          </div>
-          <button
-            className={`lineage-step ${level === "unit" ? "active" : ""}`}
-            onClick={() => chooseLevel("unit")}
-          >
-            <span>02 · 单元空间对象</span>
-            <i style={{ background: meta.color }} />
-            <div>
-              <b>{affectedUnits.length} 条独立对象记录</b>
-              <small>来源片区对象编号 = {meta.region.id}</small>
-            </div>
-            <em>{meta.unit.name}</em>
-          </button>
-          <div className="flow-arrow compact-arrow">
-            <span>适用性判定</span>
-            <i>→</i>
-          </div>
-          <button
-            className={`lineage-step rule-step ${level === "parcel" ? "active" : ""}`}
-            onClick={() => chooseLevel("parcel")}
-          >
-            <span>03 · 转译规则</span>
-            <i style={{ background: "#344b47" }} />
-            <div>
-              <b>{meta.translation.id}</b>
-              <small>{meta.translation.trigger}</small>
-            </div>
-            <em>不可直接复制</em>
-          </button>
-          <div className="flow-arrow compact-arrow">
-            <span>要求生成</span>
-            <i>→</i>
-          </div>
-          <button
-            className={`lineage-step result-step ${level === "parcel" ? "active" : ""}`}
-            onClick={() => chooseLevel("parcel")}
-          >
-            <span>04 · 地块管控要求</span>
-            <i style={{ background: meta.color }} />
-            <div>
-              <b>{applicableParcels.length} 条地块关系</b>
-              <small>{meta.translation.targets.join(" / ")}</small>
-            </div>
-            <em>关联图则实体</em>
-          </button>
-        </div>
-          </section>
-        </>
-      )}
+      <ScaleLadder item={selectedItem} level={level} setLevel={chooseLevel} />
+
+      <section className="lower-grid">
+        <StrategyLibrary />
+        <QualityGate />
+      </section>
+
+      <footer>
+        <span>依据：《西安市国土空间详细规划城市设计编审入库工作说明》第二章及附件要素目录</span>
+        <span>演示数据仅用于MVP验证 · 不替代法定规划成果</span>
+      </footer>
     </main>
   );
 }
