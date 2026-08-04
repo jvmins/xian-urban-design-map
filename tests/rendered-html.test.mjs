@@ -82,14 +82,18 @@ test("keeps all layers visible in overview and highlights exactly the selected l
   assert.match(css, /\.catalog-layer\.is-highlighted/);
 });
 
-test("provides click selection and scale-specific one-drawing-one-table schedules", async () => {
-  const { page, matrix } = await sources();
+test("shows object-specific applicable controls in the compact right panel", async () => {
+  const { page, matrix, css } = await sources();
   assert.match(page, /type SpatialSelection/);
-  assert.match(page, /一图一表 · 对象管理图则/);
-  assert.match(page, /具体管控方式/);
-  assert.match(page, /点击任一行，在地图中高亮该管控要素/);
+  assert.match(page, /function ControlInspector/);
+  assert.match(page, /rows\.filter\(\(row\) => row\.status === "适用"\)/);
+  assert.match(page, /control-method/);
+  assert.match(page, /点击控制要素可在中间地图高亮/);
+  assert.doesNotMatch(page, /function ControlSchedule/);
   assert.match(page, /selectSpatial\(\{ kind: "unit"/);
   assert.match(page, /selectSpatial\(\{ kind: "parcel"/);
+  assert.match(css, /\.control-inspector/);
+  assert.match(css, /\.control-element-card\.selected/);
   assert.match(matrix, /ControlNature = "刚性" \| "弹性" \| "引导" \| "研究"/);
   assert.match(matrix, /空间叠加 \/ 包含/);
   assert.match(matrix, /status: "适用" \| "不适用"/);

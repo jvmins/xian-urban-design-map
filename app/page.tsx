@@ -790,111 +790,12 @@ function LevelTree({
   );
 }
 
-function Inspector({
-  item,
-  level,
-  selectedParcel,
-}: {
-  item: CatalogItem | null;
-  level: CatalogLevel;
-  selectedParcel: Parcel | null;
-}) {
-  if (item === null) {
-    return (
-      <aside className="inspector-panel overview-inspector">
-        <div className="inspector-kicker"><span>全要素总览 · {levelMeta[level].name}层</span><em>{levelMeta[level].count}项</em></div>
-        <h2>综合管控工作图</h2>
-        <p className="object-id">线控 / 点控 / 指标控制 / 条文控制</p>
-        <div className="scale-role">
-          <b>{levelPrinciples[level].verb}</b>
-          <div><span>{levelPrinciples[level].question}</span><small>{levelPrinciples[level].depth}</small></div>
-        </div>
-        <div className="inspector-section">
-          <span>读图规则</span>
-          <h3>所有对象同时显示，选择后仅增强目标层</h3>
-          <p>刚性对象采用实线，弹性范围采用虚线，引导内容采用点划线，研究候选采用斜线。总览不等于将上层对象直接复制到地块。</p>
-        </div>
-        <div className="inspector-section output-section">
-          <span>对象说明</span>
-          <p>点击左侧要素查看其对象、必备属性、成果深度与传导责任；点击图中片区、单元标签或任一地块，查看对应管理表。</p>
-        </div>
-        <div className="value-warning"><b>数值边界</b><p>本MVP不虚构法定控制值；表内给出控制方式、触发条件和审查方法，定量值留待批准成果接入。</p></div>
-      </aside>
-    );
-  }
-  const profile = getChainProfile(item);
-  const stage = profile[level];
-  const principle = levelPrinciples[level];
-  return (
-    <aside className="inspector-panel">
-      <div className="inspector-kicker">
-        <span>当前对象 · {levelMeta[level].name}层</span>
-        <em>{item.geometry}对象</em>
-      </div>
-      <h2>{item.name}</h2>
-      <p className="object-id">{item.id} · {item.group}</p>
-
-      <div className="scale-role">
-        <b>{principle.verb}</b>
-        <div>
-          <span>{principle.question}</span>
-          <small>{principle.depth}</small>
-        </div>
-      </div>
-
-      <div className="inspector-section">
-        <span>本层空间对象</span>
-        <h3>{stage.object}</h3>
-        <p>{stage.responsibility}</p>
-      </div>
-
-      <div className="inspector-section">
-        <span>必备属性与证据</span>
-        <div className="evidence-list">
-          {stage.required.map((entry) => <i key={entry}>{entry}</i>)}
-        </div>
-      </div>
-
-      <div className="inspector-section output-section">
-        <span>成果深度</span>
-        <p>{stage.output}</p>
-      </div>
-
-      <div className="inspector-section">
-        <span>{level === "parcel" ? "直接来源" : "向下传导"}</span>
-        <p>{item.transmission}</p>
-      </div>
-
-      {selectedParcel && (
-        <div className="parcel-record">
-          <div>
-            <span>已选地块</span>
-            <b>{selectedParcel.id}</b>
-          </div>
-          <dl>
-            <div><dt>所属单元</dt><dd>{unitById[selectedParcel.unit].name}</dd></div>
-            <div><dt>用地</dt><dd>{selectedParcel.landUse}</dd></div>
-            <div><dt>适用判定</dt><dd>{isAffectedParcel(selectedParcel, item) ? "适用" : "不适用"}</dd></div>
-            <div><dt>规则包</dt><dd>{selectedParcel.unit === "core" ? "K-50 重点" : "一般8项矩阵"}</dd></div>
-          </dl>
-        </div>
-      )}
-
-      <div className="value-warning">
-        <b>数值边界</b>
-        <p>本MVP只演示对象、条件和审查链。具体控制值必须来自批准成果、现行导则或经审查确认的研究结论。</p>
-      </div>
-    </aside>
-  );
-}
-
-function ControlSchedule({
+function ControlInspector({
   level,
   rows,
   selectedId,
   spatialSelection,
   selectedParcel,
-  selectSpatial,
   selectItem,
 }: {
   level: CatalogLevel;
@@ -902,88 +803,83 @@ function ControlSchedule({
   selectedId: string | null;
   spatialSelection: SpatialSelection;
   selectedParcel: Parcel | null;
-  selectSpatial: (selection: SpatialSelection) => void;
   selectItem: (item: CatalogItem) => void;
 }) {
-  const applicableCount = rows.filter((row) => row.status === "适用").length;
+  const applicableRows = rows.filter((row) => row.status === "适用");
   const objectTitle = spatialSelection.kind === "region"
-    ? "假想城市设计片区 · REGION-01"
+    ? "假想城市设计片区"
     : spatialSelection.kind === "unit"
-      ? `${unitById[spatialSelection.id].name} · ${unitById[spatialSelection.id].code}-UNIT`
-      : `${selectedParcel?.id ?? spatialSelection.id} · ${selectedParcel ? unitById[selectedParcel.unit].name : "地块"}`;
+      ? unitById[spatialSelection.id].name
+      : selectedParcel?.id ?? spatialSelection.id;
+  const objectCode = spatialSelection.kind === "region"
+    ? "REGION-01"
+    : spatialSelection.kind === "unit"
+      ? `${unitById[spatialSelection.id].code}-UNIT`
+      : `${selectedParcel ? unitById[selectedParcel.unit].name : "地块"} · ${selectedParcel?.landUse ?? ""}`;
+  const objectType = spatialSelection.kind === "region" ? "所选片区" : spatialSelection.kind === "unit" ? "所选单元" : "所选地块";
+  const groupedRows = applicableRows.reduce<Record<string, ControlRow[]>>((result, row) => {
+    const catalogItem = elementCatalog[level].find((entry) => entry.id === row.id);
+    const group = catalogItem?.group ?? "其他控制";
+    (result[group] ??= []).push(row);
+    return result;
+  }, {});
+  const selectedRow = selectedId ? rows.find((row) => row.id === selectedId) : null;
+  const natureCounts = applicableRows.reduce<Record<string, number>>((result, row) => {
+    result[row.nature] = (result[row.nature] ?? 0) + 1;
+    return result;
+  }, {});
 
   return (
-    <section className="control-schedule" aria-label={`${objectTitle}管控要素表`}>
-      <div className="schedule-heading">
-        <div>
-          <span>一图一表 · 对象管理图则</span>
-          <h2>{objectTitle}</h2>
-          <p>{levelMeta[level].name}层字段深度 · 当前适用 {applicableCount} 项 / 全目录 {rows.length} 项</p>
+    <aside className="inspector-panel control-inspector" aria-label={`${objectTitle}城市设计控制要素`}>
+      <div className="control-panel-header">
+        <div className="inspector-kicker">
+          <span>{objectType} · {levelMeta[level].name}层</span>
+          <em>{applicableRows.length} 项适用</em>
         </div>
-        <div className="spatial-selector" aria-label="空间对象选择">
-          <button className={spatialSelection.kind === "region" ? "active" : ""} onClick={() => selectSpatial({ kind: "region", id: "REGION-01" })}>片区</button>
-          {units.map((unit) => (
-            <button
-              key={unit.id}
-              className={spatialSelection.kind === "unit" && spatialSelection.id === unit.id ? "active" : ""}
-              onClick={() => selectSpatial({ kind: "unit", id: unit.id })}
-            >
-              {unit.code}单元
-            </button>
-          ))}
-          <span>地块：在图中点选</span>
+        <h2>{objectTitle}</h2>
+        <p className="object-id">{objectCode}</p>
+        <div className="control-counts" aria-label="控制性质统计">
+          {(["刚性", "弹性", "引导", "研究"] as const).map((nature) => natureCounts[nature] ? (
+            <span key={nature} className={`nature-${nature}`}><b>{natureCounts[nature]}</b>{nature}</span>
+          ) : null)}
         </div>
       </div>
-      <div className="schedule-legend">
-        <span><i className="rigid-line" />刚性 / 实线</span>
-        <span><i className="elastic-line" />弹性 / 虚线</span>
-        <span><i className="guide-line" />引导 / 点划线</span>
-        <span><i className="research-area" />研究 / 候选斜线</span>
-        <b>点击任一行，在地图中高亮该管控要素</b>
-      </div>
-      <div className="schedule-table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>状态</th>
-              <th>要素编号 / 名称</th>
-              <th>{level === "region" ? "识别依据" : "来源对象"}</th>
-              <th>{level === "parcel" ? "触发关系" : "传导处置"}</th>
-              <th>控制性质</th>
-              <th>具体管控方式</th>
-              <th>图面表达</th>
-              <th>审查方法</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((row) => {
+
+      {selectedRow?.status === "不适用" && (
+        <div className="control-notice">当前高亮的 {selectedRow.id}「{selectedRow.element}」不适用于该空间对象。</div>
+      )}
+
+      <div className="control-element-list">
+        {Object.entries(groupedRows).map(([group, groupRows]) => (
+          <section key={group} className="control-element-group">
+            <div className="control-element-group-title">
+              <i style={{ background: groupColor(group) }} />
+              <span>{group}</span>
+              <b>{groupRows.length}</b>
+            </div>
+            {groupRows.map((row) => {
               const catalogItem = elementCatalog[level].find((entry) => entry.id === row.id)!;
               return (
-                <tr
+                <button
                   key={row.id}
-                  className={`${row.status === "不适用" ? "not-applicable" : ""} ${selectedId === row.id ? "selected" : ""}`}
+                  className={`control-element-card ${selectedId === row.id ? "selected" : ""}`}
                   onClick={() => selectItem(catalogItem)}
-                  tabIndex={0}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter" || event.key === " ") selectItem(catalogItem);
-                  }}
                 >
-                  <td><span className={`status-chip ${row.status === "适用" ? "ok" : "na"}`}>{row.status}</span></td>
-                  <td><b>{geometrySymbol(catalogItem.geometry)} {row.id}</b><span>{row.element}</span></td>
-                  <td>{row.source}</td>
-                  <td>{row.relation}</td>
-                  <td><em className={`nature-${row.nature}`}>{row.nature}</em></td>
-                  <td>{row.method}</td>
-                  <td>{row.expression}</td>
-                  <td>{row.review}</td>
-                </tr>
+                  <span className="control-element-topline">
+                    <i>{geometrySymbol(catalogItem.geometry)}</i>
+                    <b>{row.id} · {row.element}</b>
+                    <em className={`nature-${row.nature}`}>{row.nature}</em>
+                  </span>
+                  <span className="control-method">{row.method}</span>
+                  <small>{row.expression}</small>
+                </button>
               );
             })}
-          </tbody>
-        </table>
+          </section>
+        ))}
       </div>
-      <p className="schedule-note">注：不适用项保留在全目录中，用于证明已完成适用性判定；地块要求必须经“空间叠加—规则触发—要求生成—同类合并—冲突复核—图则关联”后生成。</p>
-    </section>
+      <p className="control-panel-note">点击控制要素可在中间地图高亮。具体控制值仍以批准成果和现行导则为准。</p>
+    </aside>
   );
 }
 
@@ -1233,18 +1129,15 @@ export default function Home() {
           </div>
         </section>
 
-        <Inspector item={selectedItem} level={level} selectedParcel={selectedParcel} />
+        <ControlInspector
+          level={level}
+          rows={controlRows}
+          selectedId={selectedItem?.id ?? null}
+          spatialSelection={spatialSelection}
+          selectedParcel={selectedParcel}
+          selectItem={selectItem}
+        />
       </section>
-
-      <ControlSchedule
-        level={level}
-        rows={controlRows}
-        selectedId={selectedItem?.id ?? null}
-        spatialSelection={spatialSelection}
-        selectedParcel={selectedParcel}
-        selectSpatial={selectSpatial}
-        selectItem={selectItem}
-      />
 
       <ScaleLadder item={selectedItem ?? items[0]} level={level} setLevel={chooseLevel} />
 
