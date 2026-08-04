@@ -15,6 +15,8 @@ const isCodexSeatbeltSandbox = process.env.CODEX_SANDBOX === "seatbelt";
 // object limited to project bindings so Sites can author deployment flags.
 const localBindingConfig = {
   main: "./worker/index.ts",
+  // Keep a non-empty explicit set so deploys replace legacy project flags.
+  compatibility_flags: ["no_throw_on_not_implemented_tls_options"],
   d1_databases: d1
     ? [
         {
