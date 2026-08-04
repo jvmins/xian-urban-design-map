@@ -11,12 +11,10 @@ const { d1, r2 } = hostingConfig;
 // macOS Seatbelt blocks FSEvents, so Codex previews need polling for HMR.
 const isCodexSeatbeltSandbox = process.env.CODEX_SANDBOX === "seatbelt";
 
-// Hosted Workers provide the current Node.js runtime baseline; keep this
-// object limited to project bindings so Sites can author deployment flags.
 const localBindingConfig = {
   main: "./worker/index.ts",
-  // Keep a non-empty explicit set so deploys replace legacy project flags.
-  compatibility_flags: ["no_throw_on_not_implemented_tls_options"],
+  compatibility_date: "2026-08-04",
+  compatibility_flags: [],
   d1_databases: d1
     ? [
         {
