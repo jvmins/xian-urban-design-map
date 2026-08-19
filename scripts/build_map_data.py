@@ -274,7 +274,9 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
                 "status": text(row.get("GHZT")),
                 "path": svg_path(row.geometry, transform),
                 "bbox": svg_bbox(row.geometry, transform),
-                "controls": relationships(row.geometry),
+                "contextControls": relationships(row.geometry),
+                # 当前成果只配置单元级管控要求，地块暂不建立规则关联。
+                "controls": [],
             }
         )
 

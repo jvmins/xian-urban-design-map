@@ -9,6 +9,8 @@ import {
   useState,
 } from "react";
 import mapDataPayload from "./map-data.json";
+import { LAND_USE_LEGEND, landUseColor } from "./land-use-palette";
+import { deriveParcelRules, parcelAreaBand } from "./parcel-rules";
 
 type Relationship = { id: string; overlap: number };
 type BBox = [number, number, number, number];
@@ -46,6 +48,7 @@ type ParcelItem = {
   status: string;
   path: string;
   bbox: BBox;
+  contextControls: Relationship[];
   controls: Relationship[];
 };
 
@@ -84,7 +87,7 @@ type Selection = { kind: "unit" | "parcel"; id: string } | null;
 type ViewBox = { x: number; y: number; width: number; height: number };
 
 const DEFAULT_VIEW: ViewBox = { x: 0, y: 0, width: 1000, height: 1000 };
-const LAND_USE_COLORS = [
+const UNIT_COLORS = [
   "#DCE7ED",
   "#E8DDD0",
   "#DCE8D5",
@@ -94,14 +97,6 @@ const LAND_USE_COLORS = [
   "#E6D5D7",
   "#DCE0CE",
 ];
-
-function hashColor(value: string) {
-  let hash = 0;
-  for (let index = 0; index < value.length; index += 1) {
-    hash = (hash * 31 + value.charCodeAt(index)) >>> 0;
-  }
-  return LAND_USE_COLORS[hash % LAND_USE_COLORS.length];
-}
 
 function formatNumber(value: number) {
   return new Intl.NumberFormat("zh-CN").format(value);
@@ -128,7 +123,7 @@ function viewForBBox(bbox: BBox): ViewBox {
   const [left, top, right, bottom] = bbox;
   const size = Math.min(1000, Math.max(150, Math.max(right - left, bottom - top) * 1.7));
   return clampView({
-    x: (left + right) / 2 - size / 2,
+    x: (left + right) / 2 - size * 0.36,
     y: (top + bottom) / 2 - size / 2,
     width: size,
     height: size,
@@ -138,12 +133,7 @@ function viewForBBox(bbox: BBox): ViewBox {
 export default function UrbanDesignMap() {
   const data = mapDataPayload as MapData;
   const [mode, setMode] = useState<"unit" | "parcel">("unit");
-  const [selection, setSelection] = useState<Selection>(() =>
-    data.units[0] ? { kind: "unit", id: data.units[0].id } : null,
-  );
-  const [visibleLayers, setVisibleLayers] = useState<string[]>(() =>
-    data.layers.filter((layer) => layer.count > 0).map((layer) => layer.key),
-  );
+  const [selection, setSelection] = useState<Selection>(null);
   const [query, setQuery] = useState("");
   const [showSearch, setShowSearch] = useState(false);
   const [viewBox, setViewBox] = useState<ViewBox>(DEFAULT_VIEW);
@@ -153,6 +143,7 @@ export default function UrbanDesignMap() {
     clientX: number;
     clientY: number;
     view: ViewBox;
+    feature: { kind: "unit" | "parcel"; id: string } | null;
   } | null>(null);
   const didDragRef = useRef(false);
 
@@ -173,7 +164,7 @@ export default function UrbanDesignMap() {
   }, [data, selection]);
 
   const applicableControls = useMemo(() => {
-    if (!selectedObject) return [];
+    if (!selectedObject || selection?.kind !== "unit") return [];
     return selectedObject.controls
       .map((relationship) => ({
         relationship,
@@ -181,12 +172,12 @@ export default function UrbanDesignMap() {
       }))
       .filter((item): item is { relationship: Relationship; control: ControlItem } => Boolean(item.control))
       .sort((a, b) => a.control.layer.localeCompare(b.control.layer, "zh-CN"));
-  }, [selectedObject, controlMap]);
+  }, [selectedObject, controlMap, selection]);
 
-  const applicableIds = useMemo(
-    () => new Set(applicableControls.map((item) => item.control.id)),
-    [applicableControls],
-  );
+  const parcelRules = useMemo(() => {
+    if (!selectedObject || selection?.kind !== "parcel") return [];
+    return deriveParcelRules(selectedObject as ParcelItem, controlMap);
+  }, [selectedObject, controlMap, selection]);
 
   const searchResults = useMemo(() => {
     if (query.trim().length < 1) return [];
@@ -215,17 +206,8 @@ export default function UrbanDesignMap() {
 
   function setMapMode(next: "unit" | "parcel") {
     setMode(next);
-    const first = next === "unit" ? data.units[0] : data.parcels[0];
-    if (first) setSelection({ kind: next, id: first.id });
+    setSelection(null);
     setViewBox(DEFAULT_VIEW);
-  }
-
-  function toggleLayer(layerKey: string) {
-    setVisibleLayers((current) =>
-      current.includes(layerKey)
-        ? current.filter((item) => item !== layerKey)
-        : [...current, layerKey],
-    );
   }
 
   function zoomBy(factor: number) {
@@ -258,6 +240,11 @@ export default function UrbanDesignMap() {
   }
 
   function handlePointerDown(event: ReactPointerEvent<SVGSVGElement>) {
+    const featureElement = (event.target as Element).closest<SVGPathElement>(
+      "[data-feature-kind][data-feature-id]",
+    );
+    const featureKind = featureElement?.dataset.featureKind;
+    const featureId = featureElement?.dataset.featureId;
     event.currentTarget.setPointerCapture(event.pointerId);
     didDragRef.current = false;
     dragRef.current = {
@@ -265,6 +252,10 @@ export default function UrbanDesignMap() {
       clientX: event.clientX,
       clientY: event.clientY,
       view: viewBox,
+      feature:
+        (featureKind === "unit" || featureKind === "parcel") && featureId
+          ? { kind: featureKind, id: featureId }
+          : null,
     };
   }
 
@@ -283,29 +274,68 @@ export default function UrbanDesignMap() {
   }
 
   function handlePointerUp(event: ReactPointerEvent<SVGSVGElement>) {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+
+    if (!didDragRef.current && drag.feature) {
+      const item = drag.feature.kind === "unit"
+        ? data.units.find((unit) => unit.id === drag.feature?.id)
+        : data.parcels.find((parcel) => parcel.id === drag.feature?.id);
+      if (item) choose(drag.feature.kind, item);
+    }
+
+    dragRef.current = null;
+    didDragRef.current = false;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  }
+
+  function handlePointerCancel(event: ReactPointerEvent<SVGSVGElement>) {
     if (dragRef.current?.pointerId === event.pointerId) dragRef.current = null;
+    didDragRef.current = false;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
   }
 
   return (
     <main className="app-shell">
       <header className="topbar">
         <div className="brand-block">
-          <div className="brand-seal">西安</div>
+          <div className="brand-seal">城</div>
           <div>
             <h1>东部城市设计一张图</h1>
-            <p>单元 · 地块 · 管控规则空间查询原型</p>
+            <p>城市设计管控信息平台</p>
           </div>
-          <span className="prototype-badge">交互原型</span>
         </div>
+        <nav className="top-navigation" aria-label="平台主导航">
+          <button type="button">门户</button>
+          <button type="button">数据中心</button>
+          <button type="button" className="active">一张图</button>
+          <button type="button">项目管理</button>
+          <button type="button">城市设计</button>
+          <button type="button">管控查询</button>
+        </nav>
         <div className="topbar-stats" aria-label="数据规模">
           <span><strong>{data.meta.unitCount}</strong> 个单元</span>
           <span><strong>{formatNumber(data.meta.parcelCount)}</strong> 个地块</span>
-          <span><strong>{data.meta.controlCount}</strong> 个涉及管控要素</span>
+          <span><strong>{data.meta.controlCount}</strong> 条规则</span>
         </div>
       </header>
 
       <section className="workspace">
+        <nav className="app-rail" aria-label="一张图功能导航">
+          <button type="button" className="active"><b>图</b><span>一张图</span></button>
+          <button type="button"><b>查</b><span>查询</span></button>
+          <button type="button"><b>表</b><span>成果</span></button>
+          <button type="button"><b>设</b><span>设置</span></button>
+        </nav>
         <aside className="left-panel">
+          <div className="data-panel-title">
+            <span>▱</span>
+            <div><strong>数据图层</strong><small>DATA LAYERS</small></div>
+          </div>
           <div className="panel-section search-section">
             <label htmlFor="map-search">空间对象查询</label>
             <div className="search-box">
@@ -372,40 +402,27 @@ export default function UrbanDesignMap() {
           <div className="panel-section layer-section">
             <div className="section-heading">
               <div>
-                <span className="eyebrow">现有矢量</span>
-                <h2>城市设计管控</h2>
+                <span className="eyebrow">显示内容</span>
+                <h2>规划对象图层</h2>
               </div>
-              <button
-                type="button"
-                className="text-button"
-                onClick={() => setVisibleLayers(data.layers.filter((layer) => layer.count > 0).map((layer) => layer.key))}
-              >全部显示</button>
             </div>
-            <div className="layer-list">
-              {data.layers.map((layer) => {
-                const active = visibleLayers.includes(layer.key);
-                return (
-                  <button
-                    type="button"
-                    key={layer.key}
-                    disabled={layer.count === 0}
-                    className={active ? "active" : ""}
-                    onClick={() => toggleLayer(layer.key)}
-                  >
-                    <span className="layer-check" style={{ borderColor: layer.color, background: active ? layer.color : "transparent" }}>
-                      {active ? "✓" : ""}
-                    </span>
-                    <span className="layer-name">{layer.label}</span>
-                    <span className="layer-count">{layer.count}</span>
-                  </button>
-                );
-              })}
+            <div className="object-layer-list">
+              <button type="button" className={mode === "unit" ? "active" : ""} onClick={() => setMapMode("unit")}>
+                <span className="object-layer-check">{mode === "unit" ? "✓" : ""}</span>
+                <span><strong>详细规划编制单元</strong><small>点击单元查看管控内容</small></span>
+                <b>{data.meta.unitCount}</b>
+              </button>
+              <button type="button" className={mode === "parcel" ? "active" : ""} onClick={() => setMapMode("parcel")}>
+                <span className="object-layer-check">{mode === "parcel" ? "✓" : ""}</span>
+                <span><strong>规划用地布局</strong><small>点击地块查看管控内容</small></span>
+                <b>{formatNumber(data.meta.parcelCount)}</b>
+              </button>
             </div>
           </div>
 
           <div className="source-note">
-            <span>数据口径</span>
-            <p>仅展示与东部单元实际相交的现有管控矢量；PDF仅补充缺失规则文字。</p>
+            <span>结果显示方式</span>
+            <p>管控范围不再作为地图图层叠加；选择单元或地块后，匹配结果直接在右侧表格中展示。</p>
           </div>
         </aside>
 
@@ -415,7 +432,7 @@ export default function UrbanDesignMap() {
               <span className="live-dot" />
               {mode === "unit" ? "单元查询模式" : "地块查询模式"}
             </div>
-            <p>滚轮缩放 · 拖动平移 · 点击图形查询</p>
+            <p>{mode === "unit" ? "直接点击任一单元查看管控结果" : "点击地块查看属性与导则分解结果"}</p>
           </div>
 
           <svg
@@ -427,7 +444,7 @@ export default function UrbanDesignMap() {
             onPointerDown={handlePointerDown}
             onPointerMove={handlePointerMove}
             onPointerUp={handlePointerUp}
-            onPointerCancel={handlePointerUp}
+            onPointerCancel={handlePointerCancel}
             aria-label="东部单元和地块矢量地图"
           >
             <defs>
@@ -457,14 +474,9 @@ export default function UrbanDesignMap() {
                       <path
                         d={unit.path}
                         className={selected ? "selected" : ""}
-                        style={{ "--unit-fill": LAND_USE_COLORS[index % LAND_USE_COLORS.length] } as CSSProperties}
-                        onClick={() => {
-                          if (didDragRef.current) {
-                            didDragRef.current = false;
-                            return;
-                          }
-                          choose("unit", unit);
-                        }}
+                        data-feature-kind="unit"
+                        data-feature-id={unit.id}
+                        style={{ "--unit-fill": UNIT_COLORS[index % UNIT_COLORS.length] } as CSSProperties}
                       />
                       {(viewBox.width < 620 || selected) && (
                         <text x={(left + right) / 2} y={(top + bottom) / 2} className={selected ? "selected-label" : ""}>
@@ -486,35 +498,15 @@ export default function UrbanDesignMap() {
                       key={parcel.id}
                       d={parcel.path}
                       className={selected ? "selected" : ""}
-                      fill={hashColor(parcel.landUseCode || parcel.landUse)}
-                      onClick={() => {
-                        if (didDragRef.current) {
-                          didDragRef.current = false;
-                          return;
-                        }
-                        choose("parcel", parcel);
-                      }}
+                      data-feature-kind="parcel"
+                      data-feature-id={parcel.id}
+                      fill={landUseColor(parcel.landUseCode, parcel.landUse)}
                     />
                   );
                 })}
               </g>
             )}
 
-            <g className="control-features" aria-hidden="true">
-              {data.controls
-                .filter((control) => visibleLayers.includes(control.layerKey))
-                .map((control) => {
-                  const layer = data.layers.find((item) => item.key === control.layerKey);
-                  return (
-                    <path
-                      key={control.id}
-                      d={control.path}
-                      className={applicableIds.has(control.id) ? "applicable" : ""}
-                      style={{ "--control-color": layer?.color ?? "#5A6B70" } as CSSProperties}
-                    />
-                  );
-                })}
-            </g>
           </svg>
 
           <div className="map-tools" aria-label="地图缩放工具">
@@ -524,10 +516,23 @@ export default function UrbanDesignMap() {
           </div>
 
           <div className="map-legend">
-            <span><i className="legend-unit" />单元边界</span>
-            <span><i className="legend-parcel" />地块边界</span>
-            <span><i className="legend-control" />管控范围</span>
+            <span><i className={mode === "unit" ? "legend-unit" : "legend-parcel"} />{mode === "unit" ? "详细规划编制单元" : "规划用地地块"}</span>
+            <span><i className="legend-selected" />当前选中对象</span>
           </div>
+
+          {mode === "parcel" && (
+            <details className="land-use-legend">
+              <summary>用地布局色板 · 20260710.lyr</summary>
+              <div>
+                {LAND_USE_LEGEND.map((item) => (
+                  <span key={item.label}>
+                    <i style={{ backgroundColor: item.color }} />
+                    {item.label}
+                  </span>
+                ))}
+              </div>
+            </details>
+          )}
 
           <div className="map-footnote">
             <span>数据范围：西安市东部</span>
@@ -535,87 +540,102 @@ export default function UrbanDesignMap() {
           </div>
         </section>
 
-        <aside className="right-panel">
+        <aside className="right-panel result-window">
           {selectedObject && selection ? (
             <>
               <div className="object-header">
-                <div className="object-kicker">
-                  <span>{selection.kind === "unit" ? "详细规划编制单元" : "规划地块"}</span>
-                  <button type="button" onClick={() => window.print()}>打印结果</button>
-                </div>
-                <h2>{selection.kind === "unit" ? (selectedObject as UnitItem).name : selectedObject.businessId}</h2>
-                <p>{selection.kind === "unit" ? selectedObject.businessId : `${(selectedObject as ParcelItem).unitId} · ${(selectedObject as ParcelItem).landUse}`}</p>
-              </div>
-
-              {selection.kind === "unit" ? (
-                <div className="attribute-card">
-                  <div><span>单元面积</span><strong>{(selectedObject as UnitItem).areaHa} ha</strong></div>
-                  <div><span>开发类型</span><strong>{(selectedObject as UnitItem).development || "—"}</strong></div>
-                  <div><span>规划人口</span><strong>{(selectedObject as UnitItem).population || "—"}</strong></div>
-                  <div className="wide"><span>主导功能</span><p>{(selectedObject as UnitItem).function || "暂无"}</p></div>
-                </div>
-              ) : (
-                <div className="attribute-card">
-                  <div><span>用地面积</span><strong>{(selectedObject as ParcelItem).areaHa} ha</strong></div>
-                  <div><span>用地性质</span><strong>{(selectedObject as ParcelItem).landUse}</strong></div>
-                  <div><span>容积率下限</span><strong>{(selectedObject as ParcelItem).farMin || "—"}</strong></div>
-                  <div><span>容积率上限</span><strong>{(selectedObject as ParcelItem).farMax || "—"}</strong></div>
-                  <div className="wide"><span>所属单元</span><p>{unitMap.get((selectedObject as ParcelItem).unitId)?.name ?? (selectedObject as ParcelItem).unitId}</p></div>
-                </div>
-              )}
-
-              <div className="rule-heading">
                 <div>
-                  <span className="eyebrow">空间叠加结果</span>
-                  <h3>涉及的城市设计管控</h3>
+                  <span>{selection.kind === "unit" ? "单元详细管控" : "地块详细管控"}</span>
+                  <h2>{selection.kind === "unit" ? (selectedObject as UnitItem).name : selectedObject.businessId}</h2>
                 </div>
-                <strong>{applicableControls.length}</strong>
+                <button type="button" onClick={() => setSelection(null)} aria-label="关闭详情">×</button>
               </div>
 
-              <div className="rule-list">
-                {applicableControls.length ? applicableControls.map(({ control, relationship }) => {
-                  const layer = data.layers.find((item) => item.key === control.layerKey);
-                  return (
-                    <article className="rule-card" key={control.id} style={{ "--rule-color": layer?.color ?? "#607176" } as CSSProperties}>
-                      <div className="rule-card-top">
-                        <span className="rule-layer">{control.layer}</span>
-                        <span className={`source-badge ${control.ruleSource === "PDF补充" ? "pdf" : ""}`}>{control.ruleSource}</span>
-                      </div>
-                      <h4>{control.title}</h4>
-                      <div className="rule-tags">
-                        {control.level && <span>{control.level}</span>}
-                        {control.subtype && <span>{control.subtype}</span>}
-                        {!control.subtype && control.type && control.type !== control.title && <span>{control.type}</span>}
-                        <span className="overlap-tag">{overlapLabel(relationship.overlap)}</span>
-                      </div>
-                      <p>{control.rule}</p>
-                      {control.range && (
-                        <details>
-                          <summary>查看原始管控范围说明</summary>
-                          <p>{control.range}</p>
-                        </details>
+              <div className="result-scroll">
+                <div className="table-section-title">
+                  <span>01</span><strong>对象基本信息</strong>
+                </div>
+                <table className="detail-table">
+                  <tbody>
+                    {selection.kind === "unit" ? (
+                      <>
+                        <tr><th>单元编号</th><td>{(selectedObject as UnitItem).businessId}</td></tr>
+                        <tr><th>单元名称</th><td>{(selectedObject as UnitItem).name}</td></tr>
+                        <tr><th>单元类型</th><td>{(selectedObject as UnitItem).unitType || "—"}</td></tr>
+                        <tr><th>主导功能</th><td>{(selectedObject as UnitItem).function || "—"}</td></tr>
+                        <tr><th>开发类型</th><td>{(selectedObject as UnitItem).development || "—"}</td></tr>
+                        <tr><th>单元面积</th><td>{(selectedObject as UnitItem).areaHa} ha</td></tr>
+                        <tr><th>规划人口</th><td>{(selectedObject as UnitItem).population || "—"}</td></tr>
+                      </>
+                    ) : (
+                      <>
+                        <tr><th>地块编号</th><td>{(selectedObject as ParcelItem).businessId}</td></tr>
+                        <tr><th>所属单元</th><td>{unitMap.get((selectedObject as ParcelItem).unitId)?.name ?? (selectedObject as ParcelItem).unitId}</td></tr>
+                        <tr><th>用地代码</th><td>{(selectedObject as ParcelItem).landUseCode || "—"}</td></tr>
+                        <tr><th>用地性质</th><td>{(selectedObject as ParcelItem).landUse}</td></tr>
+                        <tr><th>用地面积</th><td>{(selectedObject as ParcelItem).areaHa} ha</td></tr>
+                        <tr><th>容积率上限</th><td>{(selectedObject as ParcelItem).farMax || "—"}</td></tr>
+                        <tr><th>容积率下限</th><td>{(selectedObject as ParcelItem).farMin || "—"}</td></tr>
+                        <tr><th>规划状态</th><td>{(selectedObject as ParcelItem).status || "—"}</td></tr>
+                        <tr><th>面积档次</th><td>{parcelAreaBand((selectedObject as ParcelItem).areaHa)}</td></tr>
+                      </>
+                    )}
+                  </tbody>
+                </table>
+
+                <div className="table-section-title control-title">
+                  <span>02</span>
+                  <strong>{selection.kind === "unit" ? "单元城市设计管控内容" : "地块城市设计管控内容"}</strong>
+                  <b>{selection.kind === "unit" ? applicableControls.length : parcelRules.length}</b>
+                </div>
+
+                <div className="rule-list table-rule-list">
+                  <table className="control-table">
+                    <thead>
+                      <tr><th>序号</th><th>管控事项</th><th>适用条件</th><th>控制内容</th></tr>
+                    </thead>
+                    <tbody>
+                      {selection.kind === "unit" ? (
+                        applicableControls.length ? applicableControls.map(({ control, relationship }, index) => (
+                          <tr key={control.id}>
+                            <td>{String(index + 1).padStart(2, "0")}</td>
+                            <td>
+                              <strong>{control.title}</strong>
+                              <small>{control.layer}{control.level ? ` · ${control.level}` : ""}</small>
+                            </td>
+                            <td>
+                              <span>{overlapLabel(relationship.overlap)}</span>
+                              {control.subtype && <small>{control.subtype}</small>}
+                            </td>
+                            <td>
+                              <p>{control.rule}</p>
+                              <small className="result-source">{control.ruleSource}</small>
+                            </td>
+                          </tr>
+                        )) : (
+                          <tr className="empty-table-row"><td colSpan={4}>该单元当前未匹配到城市设计管控规则。</td></tr>
+                        )
+                      ) : parcelRules.length ? parcelRules.map((rule, index) => (
+                        <tr key={rule.id} data-rule-origin="guide-derived">
+                          <td>{String(index + 1).padStart(2, "0")}</td>
+                          <td><strong>{rule.element}</strong><small>{rule.group}</small></td>
+                          <td><span className={`table-strength strength-${rule.strength}`}>{rule.strength}</span><small>{rule.trigger}</small></td>
+                          <td><p>{rule.requirement}</p><small className="rule-provenance">依据：{rule.provenance}</small></td>
+                        </tr>
+                      )) : (
+                        <tr className="empty-table-row"><td colSpan={4}>该地块当前没有可计算的城市设计管控要求。</td></tr>
                       )}
-                      <button
-                        type="button"
-                        className="locate-button"
-                        onClick={() => {
-                          if (!visibleLayers.includes(control.layerKey)) toggleLayer(control.layerKey);
-                          zoomTo(control.bbox);
-                        }}
-                      >定位管控范围 ↗</button>
-                    </article>
-                  );
-                }) : (
-                  <div className="empty-rules">
-                    <div>○</div>
-                    <h4>未涉及现有管控矢量</h4>
-                    <p>该对象与城市设计管控数据GDB中的现有要素没有实质面积相交。</p>
-                  </div>
-                )}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             </>
           ) : (
-            <div className="empty-selection"><p>请在地图上选择一个单元或地块</p></div>
+            <div className="empty-selection">
+              <div className="selection-mark">⌖</div>
+              <h3>{mode === "unit" ? "点击地图中的单元" : "点击地图中的地块"}</h3>
+              <p>{mode === "unit" ? "右侧将立即列出该单元涉及的城市设计管控结果。" : "右侧将结合用地、面积和空间命中关系生成地块级管控要求。"}</p>
+            </div>
           )}
         </aside>
       </section>
