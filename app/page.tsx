@@ -1,1155 +1,624 @@
 "use client";
 
-import { useMemo, useState } from "react";
 import {
-  type CatalogItem,
-  type CatalogLevel,
-  elementCatalog,
-  generalControlStrategies,
-  keyControlStrategies,
-  transmissionStrategies,
-} from "./catalog-data";
-import {
-  type Parcel,
-  type RoadClass,
-  generateParcels,
-  getChainProfile,
-  levelPrinciples,
-  profileKeyFor,
-  reviewChecklist,
-  roads,
-  unitById,
-  units,
-} from "./urban-model";
-import {
-  buildControlRows,
-  geometrySymbol,
-  type ControlRow,
-  type SpatialSelection,
-} from "./control-matrix";
+  type CSSProperties,
+  type PointerEvent as ReactPointerEvent,
+  type WheelEvent as ReactWheelEvent,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import mapDataPayload from "./map-data.json";
 
-const levelOrder: CatalogLevel[] = ["region", "unit", "parcel"];
+type Relationship = { id: string; overlap: number };
+type BBox = [number, number, number, number];
 
-const levelMeta: Record<
-  CatalogLevel,
-  { name: string; count: number; database: string; scale: string }
-> = {
-  region: {
-    name: "片区",
-    count: 20,
-    database: "片区城市设计.gdb",
-    scale: "跨单元总体控制",
-  },
-  unit: {
-    name: "单元",
-    count: 21,
-    database: "单元城市设计.gdb",
-    scale: "六类11项空间系统",
-  },
-  parcel: {
-    name: "地块",
-    count: 29,
-    database: "地块城市设计.gdb",
-    scale: "附加图则与审查对象",
-  },
+type LayerInfo = {
+  key: string;
+  label: string;
+  color: string;
+  count: number;
 };
 
-const landUseColors: Record<Parcel["landUse"], string> = {
-  居住: "#e8dfcf",
-  商办: "#d8c7b8",
-  公共服务: "#c9d8d5",
-  产业研发: "#d5d4c3",
-  绿地: "#c9dac4",
+type UnitItem = {
+  id: string;
+  businessId: string;
+  name: string;
+  unitType: string;
+  function: string;
+  development: string;
+  areaHa: number;
+  population: string;
+  path: string;
+  bbox: BBox;
+  controls: Relationship[];
 };
 
-const roadWidths: Record<RoadClass, { casing: number; fill: number }> = {
-  快速路: { casing: 2.9, fill: 2.1 },
-  主干路: { casing: 2.25, fill: 1.62 },
-  次干路: { casing: 1.45, fill: 1.02 },
-  支路: { casing: 0.72, fill: 0.46 },
+type ParcelItem = {
+  id: string;
+  businessId: string;
+  unitId: string;
+  landUse: string;
+  landUseCode: string;
+  areaHa: number;
+  farMax: string;
+  farMin: string;
+  status: string;
+  path: string;
+  bbox: BBox;
+  controls: Relationship[];
 };
 
-function groupColor(group: string) {
-  const palette = [
-    "#bd553f",
-    "#3f7480",
-    "#548164",
-    "#9b7040",
-    "#786887",
-    "#4f6d98",
-    "#8d705b",
-    "#607a73",
-  ];
-  let value = 0;
-  for (let index = 0; index < group.length; index += 1) {
-    value = (value + group.charCodeAt(index) * (index + 3)) % 997;
+type ControlItem = {
+  id: string;
+  layerKey: string;
+  layer: string;
+  title: string;
+  type: string;
+  level: string;
+  subtype: string;
+  rule: string;
+  ruleSource: "管控数据" | "PDF补充";
+  range: string;
+  path: string;
+  bbox: BBox;
+};
+
+type MapData = {
+  meta: {
+    title: string;
+    generatedFrom: string;
+    unitCount: number;
+    parcelCount: number;
+    controlCount: number;
+    sourceControlCount: number;
+    coordinateNotice: string;
+  };
+  layers: LayerInfo[];
+  units: UnitItem[];
+  parcels: ParcelItem[];
+  controls: ControlItem[];
+};
+
+type Selection = { kind: "unit" | "parcel"; id: string } | null;
+type ViewBox = { x: number; y: number; width: number; height: number };
+
+const DEFAULT_VIEW: ViewBox = { x: 0, y: 0, width: 1000, height: 1000 };
+const LAND_USE_COLORS = [
+  "#DCE7ED",
+  "#E8DDD0",
+  "#DCE8D5",
+  "#E9E2BD",
+  "#DED9E8",
+  "#D4E4E1",
+  "#E6D5D7",
+  "#DCE0CE",
+];
+
+function hashColor(value: string) {
+  let hash = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = (hash * 31 + value.charCodeAt(index)) >>> 0;
   }
-  return palette[value % palette.length];
+  return LAND_USE_COLORS[hash % LAND_USE_COLORS.length];
 }
 
-function isAffectedParcel(parcel: Parcel, item: CatalogItem) {
-  const key = profileKeyFor(item);
-  if (key === "boundary") return true;
-  if (key === "core") {
-    return parcel.unit === "core" && Math.hypot(parcel.cx - 60, parcel.cy - 60) < 21;
-  }
-  if (key === "axis") {
-    return Math.abs(parcel.cy - 60) < 6.5 || Math.abs(parcel.cx - 60) < 4.2;
-  }
-  if (key === "center") {
-    return [
-      [60, 60],
-      [60, 20],
-      [100, 60],
-      [60, 100],
-      [20, 60],
-    ].some(([x, y]) => Math.hypot(parcel.cx - x, parcel.cy - y) < 8);
-  }
-  if (key === "wedge") {
-    return parcel.cy > 76 && parcel.cx < 54 + (parcel.cy - 76) * 0.55;
-  }
-  if (key === "ring") {
-    const onHorizontal = parcel.cx > 35 && parcel.cx < 85 &&
-      (Math.abs(parcel.cy - 38) < 4 || Math.abs(parcel.cy - 82) < 4);
-    const onVertical = parcel.cy > 35 && parcel.cy < 85 &&
-      (Math.abs(parcel.cx - 38) < 4 || Math.abs(parcel.cx - 82) < 4);
-    return onHorizontal || onVertical;
-  }
-  if (key === "corridor") {
-    const corridorX = 30 + parcel.cy * 0.22;
-    return Math.abs(parcel.cx - corridorX) < 6 || parcel.cy > 95;
-  }
-  if (key === "public") {
-    return [
-      [60, 60],
-      [60, 20],
-      [100, 60],
-      [60, 100],
-      [20, 60],
-    ].some(([x, y]) => Math.hypot(parcel.cx - x, parcel.cy - y) < 7.5);
-  }
-  if (key === "character") return parcel.unit === "west";
-  if (key === "color") return parcel.unit === "north" || parcel.unit === "east";
-  if (key === "view") {
-    const expectedY = 104 - parcel.cx * 0.66;
-    return parcel.cx > 16 && parcel.cx < 104 && Math.abs(parcel.cy - expectedY) < 8;
-  }
-  return parcel.unit === "core";
+function formatNumber(value: number) {
+  return new Intl.NumberFormat("zh-CN").format(value);
 }
 
-function RoadNetwork({ showLabels }: { showLabels: boolean }) {
-  return (
-    <g className="road-network" aria-label="四级道路网络">
-      {roads.map((road) => (
-        <path
-          key={`${road.id}-casing`}
-          d={road.path}
-          className={`road-casing road-${road.roadClass}`}
-          style={{ strokeWidth: roadWidths[road.roadClass].casing }}
-        />
-      ))}
-      {roads.map((road) => (
-        <path
-          key={`${road.id}-fill`}
-          d={road.path}
-          className={`road-fill road-${road.roadClass}`}
-          style={{ strokeWidth: roadWidths[road.roadClass].fill }}
-        />
-      ))}
-      {roads
-        .filter((road) => road.roadClass === "快速路" || road.roadClass === "主干路")
-        .map((road) => (
-          <path
-            key={`${road.id}-center`}
-            d={road.path}
-            className={`road-center road-${road.roadClass}`}
-          />
-        ))}
-      {showLabels &&
-        roads
-          .filter((road) => road.label)
-          .map((road) => {
-            const [x, y, rotation] = road.label!;
-            return (
-              <text
-                key={`${road.id}-label`}
-                x={x}
-                y={y}
-                transform={`rotate(${rotation} ${x} ${y})`}
-                className="road-label"
-              >
-                {road.name}
-              </text>
-            );
-          })}
-    </g>
-  );
+function overlapLabel(value: number) {
+  if (value >= 99.9) return "完整覆盖";
+  if (value < 0.1) return "覆盖不足 0.1%";
+  return `覆盖 ${value.toFixed(value < 10 ? 1 : 0)}%`;
 }
 
-function BaseCity({
-  parcels,
-  item,
-  level,
-  spatialSelection,
-  selectSpatial,
-  showParcels,
-  showLandUse,
-  showRoadLabels,
-}: {
-  parcels: Parcel[];
-  item: CatalogItem | null;
-  level: CatalogLevel;
-  spatialSelection: SpatialSelection;
-  selectSpatial: (selection: SpatialSelection) => void;
-  showParcels: boolean;
-  showLandUse: boolean;
-  showRoadLabels: boolean;
-}) {
-  return (
-    <>
-      <rect x="4" y="4" width="112" height="112" rx="1" className="city-ground" />
-      {units.map((unit) => (
-        <rect
-          key={`${unit.id}-wash`}
-          {...unit.bounds}
-          className={`unit-wash unit-${unit.id}`}
-          style={{ fill: unit.color }}
-        />
-      ))}
-
-      <path
-        d="M 7 104 C 34 96, 53 109, 79 101 C 94 96, 105 98, 114 93"
-        className="river-bank"
-      />
-      <path
-        d="M 7 104 C 34 96, 53 109, 79 101 C 94 96, 105 98, 114 93"
-        className="river"
-      />
-      <path d="M 8 96 C 36 90, 61 99, 112 88" className="regional-greenway" />
-
-      {showParcels &&
-        parcels.map((parcel) => {
-          const affected = level === "parcel" && item !== null && isAffectedParcel(parcel, item);
-          const isSelected = spatialSelection.kind === "parcel" && spatialSelection.id === parcel.id;
-          return (
-            <g
-              key={parcel.id}
-              className={`parcel-group ${affected ? "affected" : ""} ${
-                isSelected ? "selected" : ""
-              }`}
-              onClick={() => selectSpatial({ kind: "parcel", id: parcel.id })}
-            >
-              <rect
-                x={parcel.x}
-                y={parcel.y}
-                width={parcel.width}
-                height={parcel.height}
-                fill={showLandUse ? landUseColors[parcel.landUse] : "#e8e7df"}
-                className="parcel-lot"
-                aria-label={`${parcel.id} · ${unitById[parcel.unit].name} · ${parcel.landUse}`}
-              />
-              <rect
-                x={parcel.x + parcel.width * 0.18}
-                y={parcel.y + parcel.height * 0.2}
-                width={parcel.width * 0.64}
-                height={parcel.height * 0.56}
-                className="building-footprint"
-              />
-            </g>
-          );
-        })}
-
-      <g className="civic-spaces">
-        <rect x="53.5" y="53.5" width="13" height="13" rx="1.5" className="central-plaza" />
-        <rect x="9" y="12" width="8" height="9" rx="1" className="district-park" />
-        <rect x="10" y="55" width="8" height="12" rx="1" className="district-park" />
-        <rect x="102" y="54" width="8" height="13" rx="1" className="district-park" />
-        <rect x="52" y="102" width="15" height="8" rx="1" className="district-park" />
-        <circle cx="60" cy="60" r="2.2" className="civic-node" />
-      </g>
-
-      <RoadNetwork showLabels={showRoadLabels} />
-
-      <g className="rapid-transit">
-        <path d="M 7 57.8 H 113" />
-        {[20, 36, 48, 60, 72, 84, 100].map((x) => (
-          <circle key={x} cx={x} cy="57.8" r="0.72" />
-        ))}
-        <text x="7" y="56.5">轨道交通1号线</text>
-      </g>
-
-      {units.map((unit) => (
-        <g
-          key={`${unit.id}-boundary`}
-          className={`unit-boundary unit-${unit.id} ${
-            spatialSelection.kind === "unit" && spatialSelection.id === unit.id ? "selected" : ""
-          }`}
-          onClick={() => selectSpatial({ kind: "unit", id: unit.id })}
-          role="button"
-          aria-label={`选择${unit.name}`}
-        >
-          <rect {...unit.bounds} />
-          <rect
-            x={unit.label[0] - 9}
-            y={unit.label[1] - 2.5}
-            width="18"
-            height="5.6"
-            rx=".7"
-            className="unit-label-hit"
-          />
-          <text x={unit.label[0]} y={unit.label[1]}>{unit.name}</text>
-          <text x={unit.label[0]} y={unit.label[1] + 2.4}>{unit.role} · 120地块</text>
-        </g>
-      ))}
-    </>
-  );
+function clampView(next: ViewBox): ViewBox {
+  const width = Math.min(1000, Math.max(120, next.width));
+  const height = Math.min(1000, Math.max(120, next.height));
+  return {
+    x: Math.min(1000 - width, Math.max(0, next.x)),
+    y: Math.min(1000 - height, Math.max(0, next.y)),
+    width,
+    height,
+  };
 }
 
-function InterfaceMarker({ x, y, label }: { x: number; y: number; label: string }) {
-  return (
-    <g className="interface-marker">
-      <circle cx={x} cy={y} r="1.35" />
-      <circle cx={x} cy={y} r="0.42" />
-      <text x={x + 1.8} y={y - 1.3}>{label}</text>
-    </g>
-  );
-}
-
-function ElementOverlay({
-  item,
-  level,
-}: {
-  item: CatalogItem;
-  level: CatalogLevel;
-}) {
-  const key = profileKeyFor(item);
-  const color = groupColor(item.group);
-  const levelClass = `overlay-${level}`;
-  const isPoint = item.geometry === "点";
-  const isLine = item.geometry === "线";
-  const isArea = item.geometry === "面";
-
-  if (key === "boundary") {
-    return (
-      <g className={`element-overlay ${levelClass}`} style={{ color }}>
-        {level === "region" && <rect x="5" y="5" width="110" height="110" rx="1" />}
-        {level === "unit" &&
-          units.map((unit) => <rect key={unit.id} {...unit.bounds} />)}
-        {level === "parcel" && (
-          <>
-            <rect x="51.7" y="48.4" width="4" height="4.35" className="parcel-object-area" />
-            <rect x="60.2" y="62.8" width="3.5" height="4.2" className="parcel-object-area" />
-            <text x="52" y="47.2">调用现行地块边界</text>
-          </>
-        )}
-      </g>
-    );
-  }
-
-  if (key === "axis") {
-    return (
-      <g className={`element-overlay axis-overlay ${levelClass}`} style={{ color }}>
-        {level === "region" && (
-          <>
-            {isArea && <path d="M 7 60 C 36 58, 79 62, 113 59" className="object-range-line" />}
-            {isLine && <path d="M 7 60 C 36 58, 79 62, 113 59" className="object-center-line" />}
-            {isLine && <circle cx="7" cy="60" r="1.4" />}
-            {isLine && <circle cx="113" cy="59" r="1.4" />}
-            <text x="8.5" y={isArea ? 64.5 : 55.8}>{item.id} · {item.name}</text>
-          </>
-        )}
-        {level === "unit" && (
-          <>
-            {[
-              "M 7 60 C 18 59, 28 59, 36 59.5",
-              "M 36 59.5 C 49 59, 70 61.5, 84 60.3",
-              "M 84 60.3 C 95 60, 104 59.5, 113 59",
-            ].map((path, index) => (
-              <g key={path}>
-                {isArea && <path d={path} className="object-range-line" />}
-                {isLine && <path d={path} className="object-center-line" />}
-                <text x={[12, 52, 95][index]} y={[64.5, 65, 64.2][index]}>
-                  {item.id}-[{["W", "C", "E"][index]}]
-                </text>
-              </g>
-            ))}
-            {isLine && <InterfaceMarker x={36} y={59.5} label="IF-EW-01" />}
-            {isLine && <InterfaceMarker x={84} y={60.3} label="IF-EW-02" />}
-          </>
-        )}
-        {level === "parcel" && (
-          <>
-            {isLine && <path d="M 38 55.7 H 82" className="parcel-control-line" />}
-            {isLine && <path d="M 38 64.2 H 82" className="parcel-interface-line" />}
-            {isLine && [43, 48, 54, 66, 72, 77].map((x) => (
-              <line key={x} x1={x} y1="54.8" x2={x} y2="65.2" className="parcel-link" />
-            ))}
-            {isPoint && <polygon points="60,48 58.6,51 61.4,51" className="high-point" />}
-            {isArea && <rect x="54" y="55" width="12" height="10" rx="1" className="parcel-open-space" />}
-            <text x="38" y="52.8">{item.id} · {item.name}</text>
-          </>
-        )}
-      </g>
-    );
-  }
-
-  if (key === "core" || key === "center" || key === "public") {
-    const points = [
-      [60, 60],
-      [60, 20],
-      [100, 60],
-      [60, 100],
-      [20, 60],
-    ];
-    return (
-      <g className={`element-overlay node-overlay ${levelClass}`} style={{ color }}>
-        {level === "region" && (
-          <>
-            {isArea && <rect x="40" y="40" width="40" height="40" rx="7" className="object-area" />}
-            {points.map(([x, y], index) => (
-              <g key={`${x}-${y}`}>
-                {isArea && <circle cx={x} cy={y} r={index === 0 ? 8 : 5.2} className="object-range" />}
-                {isPoint && <circle cx={x} cy={y} r="1.15" />}
-              </g>
-            ))}
-            <text x="42" y="38">{item.id} · {item.name}</text>
-          </>
-        )}
-        {level === "unit" &&
-          points.map(([x, y], index) => (
-            <g key={`${x}-${y}`}>
-              {isArea && <circle cx={x} cy={y} r={index === 0 ? 6 : 4.3} className="object-range" />}
-              {isPoint && <circle cx={x} cy={y} r="1" />}
-              <text x={x + 1.8} y={y - 1.6}>{item.id}-{index + 1}</text>
-            </g>
-          ))}
-        {level === "parcel" && (
-          <>
-            {isArea && <rect x="53.5" y="53.5" width="13" height="13" rx="1.2" className="parcel-open-space" />}
-            {isPoint && <circle cx="60" cy="60" r="1.35" />}
-            {isPoint && [54, 60, 66].map((x) => (
-              <circle key={x} cx={x} cy="67.2" r="0.7" className="parcel-entrance" />
-            ))}
-            {isLine && <path d="M 48 60 H 72 M 60 48 V 72" className="parcel-link" />}
-            <text x="52" y="50.5">{item.id} · {item.name}</text>
-          </>
-        )}
-      </g>
-    );
-  }
-
-  if (key === "wedge") {
-    return (
-      <g className={`element-overlay green-overlay ${levelClass}`} style={{ color }}>
-        <polygon
-          points={
-            level === "region"
-              ? "7,112 7,88 30,75 54,61 50,82 30,101"
-              : level === "unit"
-                ? "7,112 7,92 29,79 50,66 47,82 27,103"
-                : "7,112 7,97 29,83 46,72 43,85 27,104"
-          }
-          className={level === "parcel" ? "parcel-object-area" : "object-area"}
-        />
-        <path d="M 11 105 L 47 73" className="object-center-line" />
-        <text x="10" y="88">
-          {level === "parcel" ? "生态连续面 + 建设退让线" : "生态绿楔边界与有效宽度"}
-        </text>
-      </g>
-    );
-  }
-
-  if (key === "ring") {
-    return (
-      <g className={`element-overlay green-overlay ${levelClass}`} style={{ color }}>
-        {isArea && <rect
-          x={level === "region" ? 34 : 37}
-          y={level === "region" ? 34 : 37}
-          width={level === "region" ? 52 : 46}
-          height={level === "region" ? 52 : 46}
-          rx="10"
-          className="object-range-line"
-        />}
-        {isLine && <rect x="39" y="39" width="42" height="42" rx="8" className="object-center-line" />}
-        {level !== "region" && isLine && (
-          <>
-            <InterfaceMarker x={60} y={39} label="IF-GR-01" />
-            <InterfaceMarker x={81} y={60} label="IF-GR-02" />
-          </>
-        )}
-        {level === "parcel" && (
-          <>
-            {isPoint && [46, 60, 74].map((x) => (
-              <circle key={x} cx={x} cy="39" r="0.72" className="parcel-entrance" />
-            ))}
-            <text x="40" y="35.5">{item.id} · {item.name}</text>
-          </>
-        )}
-      </g>
-    );
-  }
-
-  if (key === "corridor") {
-    return (
-      <g className={`element-overlay green-overlay ${levelClass}`} style={{ color }}>
-        {isArea && <path d="M 31 6 C 31 39, 42 72, 57 114" className="object-range-line corridor-range" />}
-        {isLine && <path d="M 31 6 C 31 39, 42 72, 57 114" className="object-center-line" />}
-        {level !== "region" && isLine && (
-          <>
-            <InterfaceMarker x={38} y={36} label="IF-EC-01" />
-            <InterfaceMarker x={50} y={84} label="IF-EC-02" />
-          </>
-        )}
-        {level === "parcel" && (
-          <>
-            {isLine && <path d="M 35 43 C 38 57, 44 74, 51 92" className="parcel-control-line" />}
-            <text x="25" y="41">{item.id} · {item.name}</text>
-          </>
-        )}
-      </g>
-    );
-  }
-
-  if (key === "character" || key === "color") {
-    return (
-      <g className={`element-overlay district-overlay ${levelClass}`} style={{ color }}>
-        {isArea && [
-          { x: 6, y: 37, width: 29, height: 46, label: key === "color" ? "暖灰主色区" : "历史风貌协调区" },
-          { x: 37, y: 37, width: 46, height: 46, label: key === "color" ? "中明度核心区" : "现代核心风貌区" },
-          { x: 85, y: 37, width: 29, height: 46, label: key === "color" ? "科技冷灰区" : "创新产业风貌区" },
-        ].map((zone) => (
-          <g key={zone.label}>
-            <rect {...zone} className="object-area" />
-            <text x={zone.x + 2} y={zone.y + 4}>{zone.label}</text>
-          </g>
-        ))}
-        {level === "parcel" && (
-          <>
-            {isLine && <path d="M 7 54 H 35" className="parcel-interface-line" />}
-            {isLine && <path d="M 37 54 H 83" className="parcel-control-line" />}
-            <text x="8" y="51">{item.id} · {item.name}</text>
-          </>
-        )}
-      </g>
-    );
-  }
-
-  if (key === "view") {
-    return (
-      <g className={`element-overlay view-overlay ${levelClass}`} style={{ color }}>
-        {isArea && <polygon points="14,102 77,27 91,32" className="object-area" />}
-        {isLine && <path d="M 14 102 L 84 29" className="object-center-line" />}
-        {isPoint && <circle cx="14" cy="102" r="1.5" />}
-        {isPoint && <polygon points="84,24 81.5,31 86.5,31" className="landmark-point" />}
-        <text x="16" y="105">{item.id} · {item.name}</text>
-        {level === "parcel" && (
-          <>
-            {isLine && <path d="M 37 82 L 74 43" className="parcel-control-line" />}
-            <text x="40" y="78">{item.id} · {item.name}</text>
-          </>
-        )}
-      </g>
-    );
-  }
-
-  return (
-    <g className={`element-overlay control-overlay ${levelClass}`} style={{ color }}>
-      {level === "region" && (
-        <>
-          <rect x="36" y="36" width="48" height="48" rx="2" className="candidate-zone" />
-          <text x="39" y="40">候选范围：研究状态，不直接管地块</text>
-        </>
-      )}
-      {level === "unit" && (
-        <>
-          <rect x="5" y="5" width="110" height="110" className="general-zone" />
-          <rect x="36" y="36" width="48" height="48" className="key-zone" />
-          <text x="39" y="40">一级重点控制区 · 唯一类型：重要发展区</text>
-          <text x="8" y="112">其余为一般控制区 · 完整覆盖 / 互不重叠</text>
-        </>
-      )}
-      {level === "parcel" && (
-        <>
-          <rect x="37" y="37" width="46" height="46" className="key-zone" />
-          <path d="M 38 55.8 H 82" className="parcel-control-line" />
-          <rect x="54" y="55" width="12" height="10" className="parcel-open-space" />
-          <text x="39" y="41">加载 K-50 重要发展区唯一强化规则包</text>
-        </>
-      )}
-    </g>
-  );
-}
-
-function ParcelFigure({ item }: { item: CatalogItem }) {
-  const color = groupColor(item.group);
-  return (
-    <g className="parcel-figure" transform="translate(86 7)" style={{ color }}>
-      <rect x="0" y="0" width="27" height="24" rx="1.2" className="figure-paper" />
-      <text x="2" y="3.2">附加图则局部 · {item.id}</text>
-      <rect x="3" y="5.2" width="21" height="15.5" className="figure-parcel" />
-      <rect x="7" y="8" width="6" height="9" className="figure-building" />
-      <rect x="15" y="7" width="5" height="11" className="figure-building" />
-      {item.geometry === "点" ? (
-        <>
-          <circle cx="18" cy="15" r="1.35" className="figure-object-point" />
-          <circle cx="18" cy="15" r="2.6" className="figure-object-range" />
-        </>
-      ) : item.geometry === "线" ? (
-        <path d="M 4 18.5 H 23" className="figure-object-line" />
-      ) : (
-        <rect x="4.5" y="13" width="18" height="6.5" className="figure-object-area" />
-      )}
-      <circle cx="4.5" cy="18.5" r=".55" className="figure-entry" />
-      <text x="2" y="23">几何实体 + 属性 + 审查条款</text>
-    </g>
-  );
-}
-
-function ProfessionalMap({
-  parcels,
-  item,
-  items,
-  level,
-  spatialSelection,
-  selectSpatial,
-  showParcels,
-  showLandUse,
-  showRoadLabels,
-}: {
-  parcels: Parcel[];
-  item: CatalogItem | null;
-  items: CatalogItem[];
-  level: CatalogLevel;
-  spatialSelection: SpatialSelection;
-  selectSpatial: (selection: SpatialSelection) => void;
-  showParcels: boolean;
-  showLandUse: boolean;
-  showRoadLabels: boolean;
-}) {
-  return (
-    <div className="map-frame">
-      <svg
-        viewBox="0 0 120 120"
-        className="professional-map"
-        aria-label="包含五个单元、600个地块和四级道路网络的假想城市"
-      >
-        <defs>
-          <pattern id="parcelHatch" width="2.4" height="2.4" patternUnits="userSpaceOnUse" patternTransform="rotate(35)">
-            <line x1="0" y1="0" x2="0" y2="2.4" className="hatch-line" />
-          </pattern>
-          <filter id="mapShadow" x="-10%" y="-10%" width="120%" height="120%">
-            <feDropShadow dx="0" dy=".55" stdDeviation=".55" floodOpacity=".16" />
-          </filter>
-        </defs>
-        <BaseCity
-          parcels={parcels}
-          item={item}
-          level={level}
-          spatialSelection={spatialSelection}
-          selectSpatial={selectSpatial}
-          showParcels={showParcels}
-          showLandUse={showLandUse}
-          showRoadLabels={showRoadLabels}
-        />
-        <g className={`catalog-overview ${item ? "has-highlight" : ""}`} aria-label={`${items.length}项管控要素总览`}>
-          {items.map((catalogItem) => (
-            <g
-              key={catalogItem.id}
-              data-element-id={catalogItem.id}
-              className={`catalog-layer ${
-                item === null
-                  ? "is-overview"
-                  : item.id === catalogItem.id
-                    ? "is-highlighted"
-                    : "is-muted"
-              }`}
-            >
-              <ElementOverlay item={catalogItem} level={level} />
-            </g>
-          ))}
-        </g>
-        {level === "parcel" && item && <ParcelFigure item={item} />}
-        <rect
-          x="4"
-          y="4"
-          width="112"
-          height="112"
-          rx="1"
-          className={`map-outline ${spatialSelection.kind === "region" ? "selected" : ""}`}
-          onClick={() => selectSpatial({ kind: "region", id: "REGION-01" })}
-          role="button"
-          aria-label="选择假想城市设计片区"
-        />
-        <g
-          className={`region-label ${spatialSelection.kind === "region" ? "selected" : ""}`}
-          onClick={() => selectSpatial({ kind: "region", id: "REGION-01" })}
-          role="button"
-          aria-label="选择片区UD-01"
-        >
-          <rect x="91" y="7" width="21" height="5.5" rx=".6" />
-          <text x="101.5" y="10.5">片区 UD-01</text>
-        </g>
-        <g className="drawing-index" aria-hidden="true">
-          {[20, 40, 60, 80, 100].map((value, index) => (
-            <g key={value}>
-              <text x={value} y="3">{String.fromCharCode(65 + index)}</text>
-              <text x="2.3" y={value}>{index + 1}</text>
-            </g>
-          ))}
-        </g>
-      </svg>
-      <div className="map-north" aria-hidden="true"><b>N</b><i /></div>
-      <div className="map-scale" aria-label="比例尺"><span /><small>0</small><small>500m</small><small>1km</small></div>
-      <div className="map-titleblock">
-        <b>{levelMeta[level].name}层城市设计管控图</b>
-        <span>图号 UD-{level === "region" ? "R" : level === "unit" ? "U" : "P"}-01</span>
-        <span>示意比例 1:{level === "region" ? "5000" : level === "unit" ? "2000" : "1000"}</span>
-        <span>坐标系：MVP LOCAL GRID</span>
-      </div>
-    </div>
-  );
-}
-
-function LevelTree({
-  level,
-  setLevel,
-  selectedId,
-  clearSelection,
-  selectItem,
-}: {
-  level: CatalogLevel;
-  setLevel: (level: CatalogLevel) => void;
-  selectedId: string | null;
-  clearSelection: () => void;
-  selectItem: (item: CatalogItem) => void;
-}) {
-  const items = elementCatalog[level];
-  const groups = useMemo(
-    () =>
-      items.reduce<Record<string, CatalogItem[]>>((result, item) => {
-        (result[item.group] ??= []).push(item);
-        return result;
-      }, {}),
-    [items],
-  );
-
-  return (
-    <aside className="layer-panel">
-      <div className="panel-heading">
-        <div>
-          <span>标准空间要素</span>
-          <small>70类 · 点线面分层入库</small>
-        </div>
-        <b>ALL</b>
-      </div>
-      <div className="level-tabs">
-        {levelOrder.map((levelId) => (
-          <button
-            key={levelId}
-            className={level === levelId ? "active" : ""}
-            onClick={() => setLevel(levelId)}
-          >
-            <b>{levelMeta[levelId].count}</b>
-            <span>{levelMeta[levelId].name}</span>
-            <small>{levelPrinciples[levelId].verb}</small>
-          </button>
-        ))}
-      </div>
-      <div className="database-card">
-        <span>{levelMeta[level].database}</span>
-        <small>{levelMeta[level].scale}</small>
-      </div>
-      <button className={`overview-button ${selectedId === null ? "active" : ""}`} onClick={clearSelection}>
-        <span>全要素总览</span>
-        <b>{items.length} / {items.length} 已加载</b>
-        <small>选择单项后增强目标图层，其余图层保留为参照</small>
-      </button>
-      <div className="element-groups">
-        {Object.entries(groups).map(([group, groupItems]) => (
-          <section key={group} className="element-group">
-            <div className="element-group-title">
-              <i style={{ background: groupColor(group) }} />
-              <span>{group}</span>
-              <b>{groupItems.length}</b>
-            </div>
-            {groupItems.map((item) => (
-              <button
-                key={item.id}
-                className={selectedId === item.id ? "active" : ""}
-                onClick={() => selectItem(item)}
-              >
-                <span>{item.id}</span>
-                <b>{item.name}</b>
-                <em>{item.geometry}</em>
-              </button>
-            ))}
-          </section>
-        ))}
-      </div>
-    </aside>
-  );
-}
-
-function ControlInspector({
-  level,
-  rows,
-  selectedId,
-  spatialSelection,
-  selectedParcel,
-  selectItem,
-}: {
-  level: CatalogLevel;
-  rows: ControlRow[];
-  selectedId: string | null;
-  spatialSelection: SpatialSelection;
-  selectedParcel: Parcel | null;
-  selectItem: (item: CatalogItem) => void;
-}) {
-  const applicableRows = rows.filter((row) => row.status === "适用");
-  const objectTitle = spatialSelection.kind === "region"
-    ? "假想城市设计片区"
-    : spatialSelection.kind === "unit"
-      ? unitById[spatialSelection.id].name
-      : selectedParcel?.id ?? spatialSelection.id;
-  const objectCode = spatialSelection.kind === "region"
-    ? "REGION-01"
-    : spatialSelection.kind === "unit"
-      ? `${unitById[spatialSelection.id].code}-UNIT`
-      : `${selectedParcel ? unitById[selectedParcel.unit].name : "地块"} · ${selectedParcel?.landUse ?? ""}`;
-  const objectType = spatialSelection.kind === "region" ? "所选片区" : spatialSelection.kind === "unit" ? "所选单元" : "所选地块";
-  const groupedRows = applicableRows.reduce<Record<string, ControlRow[]>>((result, row) => {
-    const catalogItem = elementCatalog[level].find((entry) => entry.id === row.id);
-    const group = catalogItem?.group ?? "其他控制";
-    (result[group] ??= []).push(row);
-    return result;
-  }, {});
-  const selectedRow = selectedId ? rows.find((row) => row.id === selectedId) : null;
-  const natureCounts = applicableRows.reduce<Record<string, number>>((result, row) => {
-    result[row.nature] = (result[row.nature] ?? 0) + 1;
-    return result;
-  }, {});
-
-  return (
-    <aside className="inspector-panel control-inspector" aria-label={`${objectTitle}城市设计控制要素`}>
-      <div className="control-panel-header">
-        <div className="inspector-kicker">
-          <span>{objectType} · {levelMeta[level].name}层</span>
-          <em>{applicableRows.length} 项适用</em>
-        </div>
-        <h2>{objectTitle}</h2>
-        <p className="object-id">{objectCode}</p>
-        <div className="control-counts" aria-label="控制性质统计">
-          {(["刚性", "弹性", "引导", "研究"] as const).map((nature) => natureCounts[nature] ? (
-            <span key={nature} className={`nature-${nature}`}><b>{natureCounts[nature]}</b>{nature}</span>
-          ) : null)}
-        </div>
-      </div>
-
-      {selectedRow?.status === "不适用" && (
-        <div className="control-notice">当前高亮的 {selectedRow.id}「{selectedRow.element}」不适用于该空间对象。</div>
-      )}
-
-      <div className="control-element-list">
-        {Object.entries(groupedRows).map(([group, groupRows]) => (
-          <section key={group} className="control-element-group">
-            <div className="control-element-group-title">
-              <i style={{ background: groupColor(group) }} />
-              <span>{group}</span>
-              <b>{groupRows.length}</b>
-            </div>
-            {groupRows.map((row) => {
-              const catalogItem = elementCatalog[level].find((entry) => entry.id === row.id)!;
-              return (
-                <button
-                  key={row.id}
-                  className={`control-element-card ${selectedId === row.id ? "selected" : ""}`}
-                  onClick={() => selectItem(catalogItem)}
-                >
-                  <span className="control-element-topline">
-                    <i>{geometrySymbol(catalogItem.geometry)}</i>
-                    <b>{row.id} · {row.element}</b>
-                    <em className={`nature-${row.nature}`}>{row.nature}</em>
-                  </span>
-                  <span className="control-method">{row.method}</span>
-                  <small>{row.expression}</small>
-                </button>
-              );
-            })}
-          </section>
-        ))}
-      </div>
-      <p className="control-panel-note">点击控制要素可在中间地图高亮。具体控制值仍以批准成果和现行导则为准。</p>
-    </aside>
-  );
-}
-
-function ScaleLadder({
-  item,
-  level,
-  setLevel,
-}: {
-  item: CatalogItem;
-  level: CatalogLevel;
-  setLevel: (level: CatalogLevel) => void;
-}) {
-  const profile = getChainProfile(item);
-  return (
-    <section className="scale-ladder">
-      <div className="ladder-heading">
-        <div>
-          <span>专业传导剖面</span>
-          <h2>{profile.title}</h2>
-        </div>
-        <p>{profile.thesis}</p>
-      </div>
-      <div className="ladder-flow">
-        {levelOrder.map((levelId, index) => {
-          const stage = profile[levelId];
-          return (
-            <div className="ladder-segment" key={levelId}>
-              <button
-                className={`ladder-card ${level === levelId ? "active" : ""}`}
-                onClick={() => setLevel(levelId)}
-              >
-                <div>
-                  <span>0{index + 1} · {levelMeta[levelId].name}</span>
-                  <b>{levelPrinciples[levelId].verb}</b>
-                </div>
-                <h3>{stage.object}</h3>
-                <p>{stage.responsibility}</p>
-                <small>{stage.output}</small>
-              </button>
-              {index < 2 && (
-                <div className="ladder-arrow">
-                  <span>{index === 0 ? "分解 / 继承 / 深化" : "适用性 + 规则转译"}</span>
-                  <b>→</b>
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
-      <div className="rule-evidence">
-        <div><span>空间关系</span><b>{profile.relation}</b></div>
-        <div><span>规则触发</span><b>{profile.trigger}</b></div>
-        <div><span>合并 / 冲突</span><b>{profile.mergeRule}</b></div>
-      </div>
-      <div className="translation-pipeline">
-        {["空间叠加", "规则触发", "要求生成", "同类合并", "冲突复核", "图则关联"].map(
-          (step, index) => (
-            <span key={step}><b>{index + 1}</b>{step}</span>
-          ),
-        )}
-      </div>
-    </section>
-  );
-}
-
-function StrategyLibrary() {
-  const [tab, setTab] = useState<"transmission" | "general" | "key">("transmission");
-  const strategies =
-    tab === "general"
-      ? generalControlStrategies
-      : tab === "key"
-        ? keyControlStrategies
-        : transmissionStrategies;
-  return (
-    <section className="strategy-library">
-      <div className="strategy-heading">
-        <div>
-          <span>控制策略库</span>
-          <h2>传导方式、一般8项、重点5类</h2>
-        </div>
-        <div className="strategy-tabs">
-          <button className={tab === "transmission" ? "active" : ""} onClick={() => setTab("transmission")}>传导 10</button>
-          <button className={tab === "general" ? "active" : ""} onClick={() => setTab("general")}>一般 8</button>
-          <button className={tab === "key" ? "active" : ""} onClick={() => setTab("key")}>重点 5</button>
-        </div>
-      </div>
-      <div className="strategy-cards">
-        {strategies.map((strategy) => (
-          <article key={strategy.id}>
-            <span>{strategy.id}</span>
-            <h3>{strategy.name}</h3>
-            <dl>
-              <div><dt>适用判定</dt><dd>{strategy.condition}</dd></div>
-              <div><dt>图则表达</dt><dd>{strategy.expression}</dd></div>
-              <div><dt>记录要求</dt><dd>{strategy.requirement}</dd></div>
-            </dl>
-          </article>
-        ))}
-      </div>
-    </section>
-  );
-}
-
-function QualityGate() {
-  return (
-    <section className="quality-gate">
-      <div className="quality-heading">
-        <div>
-          <span>任务质量门禁</span>
-          <h2>每轮任务均需通过六项审查</h2>
-        </div>
-        <b>6 / 6</b>
-      </div>
-      <div className="quality-list">
-        {reviewChecklist.map((item) => (
-          <article key={item.id}>
-            <i>✓</i>
-            <div>
-              <span>{item.id} · {item.name}</span>
-              <p>{item.criterion}</p>
-            </div>
-            <b>通过</b>
-          </article>
-        ))}
-      </div>
-      <p className="quality-note">审查顺序：数据完整性 → 传导逻辑 → 空间表达 → 交互可读性 → 构建验证 → 线上复核。任一项不通过则不发布。</p>
-    </section>
-  );
-}
-
-export default function Home() {
-  const parcels = useMemo(() => generateParcels(), []);
-  const [level, setLevel] = useState<CatalogLevel>("unit");
-  const [selectedIds, setSelectedIds] = useState<Record<CatalogLevel, string | null>>({
-    region: null,
-    unit: null,
-    parcel: null,
+function viewForBBox(bbox: BBox): ViewBox {
+  const [left, top, right, bottom] = bbox;
+  const size = Math.min(1000, Math.max(150, Math.max(right - left, bottom - top) * 1.7));
+  return clampView({
+    x: (left + right) / 2 - size / 2,
+    y: (top + bottom) / 2 - size / 2,
+    width: size,
+    height: size,
   });
-  const [spatialSelection, setSpatialSelection] = useState<SpatialSelection>({ kind: "unit", id: "core" });
-  const [showParcels, setShowParcels] = useState(true);
-  const [showLandUse, setShowLandUse] = useState(true);
-  const [showRoadLabels, setShowRoadLabels] = useState(true);
+}
 
-  const items = elementCatalog[level];
-  const selectedItem = items.find((item) => item.id === selectedIds[level]) ?? null;
-  const selectedParcel = spatialSelection.kind === "parcel"
-    ? parcels.find((parcel) => parcel.id === spatialSelection.id) ?? null
-    : null;
-  const controlRows = buildControlRows(items, level, spatialSelection, selectedParcel, isAffectedParcel);
-  const affectedCount = selectedItem
-    ? parcels.filter((parcel) => isAffectedParcel(parcel, selectedItem)).length
-    : controlRows.filter((row) => row.status === "适用").length;
+export default function UrbanDesignMap() {
+  const data = mapDataPayload as MapData;
+  const [mode, setMode] = useState<"unit" | "parcel">("unit");
+  const [selection, setSelection] = useState<Selection>(() =>
+    data.units[0] ? { kind: "unit", id: data.units[0].id } : null,
+  );
+  const [visibleLayers, setVisibleLayers] = useState<string[]>(() =>
+    data.layers.filter((layer) => layer.count > 0).map((layer) => layer.key),
+  );
+  const [query, setQuery] = useState("");
+  const [showSearch, setShowSearch] = useState(false);
+  const [viewBox, setViewBox] = useState<ViewBox>(DEFAULT_VIEW);
+  const svgRef = useRef<SVGSVGElement | null>(null);
+  const dragRef = useRef<{
+    pointerId: number;
+    clientX: number;
+    clientY: number;
+    view: ViewBox;
+  } | null>(null);
+  const didDragRef = useRef(false);
 
-  function chooseLevel(next: CatalogLevel) {
-    setLevel(next);
-    setSelectedIds((current) => ({ ...current, [next]: null }));
-    if (next === "region") setSpatialSelection({ kind: "region", id: "REGION-01" });
-    if (next === "unit") setSpatialSelection({ kind: "unit", id: "core" });
-    if (next === "parcel") setSpatialSelection({ kind: "parcel", id: "C-001" });
+  const unitMap = useMemo(
+    () => new Map(data.units.map((unit) => [unit.businessId, unit])),
+    [data],
+  );
+  const controlMap = useMemo(
+    () => new Map(data.controls.map((control) => [control.id, control])),
+    [data],
+  );
+
+  const selectedObject = useMemo(() => {
+    if (!selection) return null;
+    return selection.kind === "unit"
+      ? data.units.find((unit) => unit.id === selection.id) ?? null
+      : data.parcels.find((parcel) => parcel.id === selection.id) ?? null;
+  }, [data, selection]);
+
+  const applicableControls = useMemo(() => {
+    if (!selectedObject) return [];
+    return selectedObject.controls
+      .map((relationship) => ({
+        relationship,
+        control: controlMap.get(relationship.id),
+      }))
+      .filter((item): item is { relationship: Relationship; control: ControlItem } => Boolean(item.control))
+      .sort((a, b) => a.control.layer.localeCompare(b.control.layer, "zh-CN"));
+  }, [selectedObject, controlMap]);
+
+  const applicableIds = useMemo(
+    () => new Set(applicableControls.map((item) => item.control.id)),
+    [applicableControls],
+  );
+
+  const searchResults = useMemo(() => {
+    if (query.trim().length < 1) return [];
+    const keyword = query.trim().toLowerCase();
+    const unitResults = data.units
+      .filter((unit) => `${unit.businessId}${unit.name}`.toLowerCase().includes(keyword))
+      .slice(0, 5)
+      .map((item) => ({ kind: "unit" as const, item }));
+    const parcelResults = data.parcels
+      .filter((parcel) => `${parcel.businessId}${parcel.landUse}${parcel.unitId}`.toLowerCase().includes(keyword))
+      .slice(0, 8 - unitResults.length)
+      .map((item) => ({ kind: "parcel" as const, item }));
+    return [...unitResults, ...parcelResults];
+  }, [data, query]);
+
+  function zoomTo(bbox: BBox) {
+    setViewBox(viewForBBox(bbox));
   }
 
-  function selectItem(item: CatalogItem) {
-    setSelectedIds((current) => ({ ...current, [level]: item.id }));
+  function choose(kind: "unit" | "parcel", item: UnitItem | ParcelItem) {
+    setMode(kind);
+    setSelection({ kind, id: item.id });
+    zoomTo(item.bbox);
+    setShowSearch(false);
   }
 
-  function selectSpatial(selection: SpatialSelection) {
-    setSpatialSelection(selection);
-    const nextLevel: CatalogLevel = selection.kind === "region" ? "region" : selection.kind === "unit" ? "unit" : "parcel";
-    setLevel(nextLevel);
-    setSelectedIds((current) => ({ ...current, [nextLevel]: null }));
+  function setMapMode(next: "unit" | "parcel") {
+    setMode(next);
+    const first = next === "unit" ? data.units[0] : data.parcels[0];
+    if (first) setSelection({ kind: next, id: first.id });
+    setViewBox(DEFAULT_VIEW);
+  }
+
+  function toggleLayer(layerKey: string) {
+    setVisibleLayers((current) =>
+      current.includes(layerKey)
+        ? current.filter((item) => item !== layerKey)
+        : [...current, layerKey],
+    );
+  }
+
+  function zoomBy(factor: number) {
+    setViewBox((current) => {
+      const width = current.width * factor;
+      const height = current.height * factor;
+      return clampView({
+        x: current.x + (current.width - width) / 2,
+        y: current.y + (current.height - height) / 2,
+        width,
+        height,
+      });
+    });
+  }
+
+  function handleWheel(event: ReactWheelEvent<SVGSVGElement>) {
+    event.preventDefault();
+    const rect = event.currentTarget.getBoundingClientRect();
+    const pointX = viewBox.x + ((event.clientX - rect.left) / rect.width) * viewBox.width;
+    const pointY = viewBox.y + ((event.clientY - rect.top) / rect.height) * viewBox.height;
+    const factor = event.deltaY > 0 ? 1.16 : 0.86;
+    const width = viewBox.width * factor;
+    const height = viewBox.height * factor;
+    setViewBox(clampView({
+      x: pointX - ((event.clientX - rect.left) / rect.width) * width,
+      y: pointY - ((event.clientY - rect.top) / rect.height) * height,
+      width,
+      height,
+    }));
+  }
+
+  function handlePointerDown(event: ReactPointerEvent<SVGSVGElement>) {
+    event.currentTarget.setPointerCapture(event.pointerId);
+    didDragRef.current = false;
+    dragRef.current = {
+      pointerId: event.pointerId,
+      clientX: event.clientX,
+      clientY: event.clientY,
+      view: viewBox,
+    };
+  }
+
+  function handlePointerMove(event: ReactPointerEvent<SVGSVGElement>) {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    const deltaX = event.clientX - drag.clientX;
+    const deltaY = event.clientY - drag.clientY;
+    if (Math.hypot(deltaX, deltaY) > 3) didDragRef.current = true;
+    setViewBox(clampView({
+      ...drag.view,
+      x: drag.view.x - (deltaX / rect.width) * drag.view.width,
+      y: drag.view.y - (deltaY / rect.height) * drag.view.height,
+    }));
+  }
+
+  function handlePointerUp(event: ReactPointerEvent<SVGSVGElement>) {
+    if (dragRef.current?.pointerId === event.pointerId) dragRef.current = null;
   }
 
   return (
-    <main className="professional-shell">
+    <main className="app-shell">
       <header className="topbar">
-        <div className="brand">
-          <span>XI&apos;AN URBAN DESIGN LAB</span>
+        <div className="brand-block">
+          <div className="brand-seal">西安</div>
           <div>
-            <h1>城市设计空间对象识别与落位</h1>
-            <p>片区统筹 → 单元落实 → 地块规则转译</p>
+            <h1>东部城市设计一张图</h1>
+            <p>单元 · 地块 · 管控规则空间查询原型</p>
           </div>
+          <span className="prototype-badge">交互原型</span>
         </div>
-        <div className="topbar-status">
-          <span>专业假想城 · 非现状法定图</span>
-          <b><i /> 质量门禁通过</b>
+        <div className="topbar-stats" aria-label="数据规模">
+          <span><strong>{data.meta.unitCount}</strong> 个单元</span>
+          <span><strong>{formatNumber(data.meta.parcelCount)}</strong> 个地块</span>
+          <span><strong>{data.meta.controlCount}</strong> 个涉及管控要素</span>
         </div>
       </header>
 
-      <section className="metric-ribbon">
-        <div><span>城市底图</span><b>四级路网</b><small>快速路 / 主干路 / 次干路 / 支路</small></div>
-        <div><span>规划单元</span><b>5</b><small>中央核心单元 1 个</small></div>
-        <div><span>现行地块</span><b>600</b><small>每单元 120 个</small></div>
-        <div><span>标准要素</span><b>20 / 21 / 29</b><small>片区 / 单元 / 地块</small></div>
-        <div><span>{selectedItem ? "关联地块" : "适用要素"}</span><b>{affectedCount}</b><small>{selectedItem ? "基于空间关系动态判定" : "对象管理表实时统计"}</small></div>
-      </section>
-
-      <section className="studio-grid">
-        <LevelTree
-          level={level}
-          setLevel={chooseLevel}
-          selectedId={selectedItem?.id ?? null}
-          clearSelection={() => setSelectedIds((current) => ({ ...current, [level]: null }))}
-          selectItem={selectItem}
-        />
-
-        <section className="map-panel">
-          <div className="map-toolbar">
-            <div>
-              <span>{levelMeta[level].name}层规划管理图则</span>
-              <h2>{selectedItem ? `${selectedItem.id} · ${selectedItem.name}` : `全要素总览 · ${items.length}项同时显示`}</h2>
-              <small>{selectedItem ? selectedItem.content : "图层已完整加载；选择任一要素后增强其线型、填充和注记，其余要素保留为上下文参照。"}</small>
+      <section className="workspace">
+        <aside className="left-panel">
+          <div className="panel-section search-section">
+            <label htmlFor="map-search">空间对象查询</label>
+            <div className="search-box">
+              <span aria-hidden="true">⌕</span>
+              <input
+                id="map-search"
+                value={query}
+                onChange={(event) => {
+                  setQuery(event.target.value);
+                  setShowSearch(true);
+                }}
+                onFocus={() => setShowSearch(true)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && searchResults[0]) {
+                    choose(searchResults[0].kind, searchResults[0].item);
+                  }
+                }}
+                placeholder="输入单元或地块编号"
+                autoComplete="off"
+              />
             </div>
-            <div className="map-toggles" aria-label="地图图层开关">
-              <button className={showParcels ? "active" : ""} onClick={() => setShowParcels((value) => !value)}>地块</button>
-              <button className={showLandUse ? "active" : ""} onClick={() => setShowLandUse((value) => !value)}>用地底色</button>
-              <button className={showRoadLabels ? "active" : ""} onClick={() => setShowRoadLabels((value) => !value)}>路名</button>
+            {showSearch && query && (
+              <div className="search-results">
+                {searchResults.length ? searchResults.map((result) => (
+                  <button
+                    key={`${result.kind}-${result.item.id}`}
+                    type="button"
+                    onClick={() => choose(result.kind, result.item)}
+                  >
+                    <span>{result.kind === "unit" ? "单元" : "地块"}</span>
+                    <strong>{result.kind === "unit" ? result.item.name : result.item.businessId}</strong>
+                    <small>{result.kind === "unit" ? result.item.businessId : result.item.landUse}</small>
+                  </button>
+                )) : <p>没有找到匹配对象</p>}
+              </div>
+            )}
+          </div>
+
+          <div className="panel-section">
+            <div className="section-heading">
+              <div>
+                <span className="eyebrow">查询对象</span>
+                <h2>空间层级</h2>
+              </div>
+            </div>
+            <div className="mode-switch" role="group" aria-label="选择空间层级">
+              <button
+                type="button"
+                className={mode === "unit" ? "active" : ""}
+                onClick={() => setMapMode("unit")}
+              >
+                <strong>单元</strong><span>38</span>
+              </button>
+              <button
+                type="button"
+                className={mode === "parcel" ? "active" : ""}
+                onClick={() => setMapMode("parcel")}
+              >
+                <strong>地块</strong><span>3,544</span>
+              </button>
             </div>
           </div>
 
-          <ProfessionalMap
-            parcels={parcels}
-            item={selectedItem}
-            items={items}
-            level={level}
-            spatialSelection={spatialSelection}
-            selectSpatial={selectSpatial}
-            showParcels={showParcels}
-            showLandUse={showLandUse}
-            showRoadLabels={showRoadLabels}
-          />
+          <div className="panel-section layer-section">
+            <div className="section-heading">
+              <div>
+                <span className="eyebrow">现有矢量</span>
+                <h2>城市设计管控</h2>
+              </div>
+              <button
+                type="button"
+                className="text-button"
+                onClick={() => setVisibleLayers(data.layers.filter((layer) => layer.count > 0).map((layer) => layer.key))}
+              >全部显示</button>
+            </div>
+            <div className="layer-list">
+              {data.layers.map((layer) => {
+                const active = visibleLayers.includes(layer.key);
+                return (
+                  <button
+                    type="button"
+                    key={layer.key}
+                    disabled={layer.count === 0}
+                    className={active ? "active" : ""}
+                    onClick={() => toggleLayer(layer.key)}
+                  >
+                    <span className="layer-check" style={{ borderColor: layer.color, background: active ? layer.color : "transparent" }}>
+                      {active ? "✓" : ""}
+                    </span>
+                    <span className="layer-name">{layer.label}</span>
+                    <span className="layer-count">{layer.count}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="source-note">
+            <span>数据口径</span>
+            <p>仅展示与东部单元实际相交的现有管控矢量；PDF仅补充缺失规则文字。</p>
+          </div>
+        </aside>
+
+        <section className="map-stage" aria-label="城市设计一张图地图">
+          <div className="map-caption">
+            <div>
+              <span className="live-dot" />
+              {mode === "unit" ? "单元查询模式" : "地块查询模式"}
+            </div>
+            <p>滚轮缩放 · 拖动平移 · 点击图形查询</p>
+          </div>
+
+          <svg
+            ref={svgRef}
+            className={`city-map mode-${mode}`}
+            viewBox={`${viewBox.x} ${viewBox.y} ${viewBox.width} ${viewBox.height}`}
+            preserveAspectRatio="xMidYMid meet"
+            onWheel={handleWheel}
+            onPointerDown={handlePointerDown}
+            onPointerMove={handlePointerMove}
+            onPointerUp={handlePointerUp}
+            onPointerCancel={handlePointerUp}
+            aria-label="东部单元和地块矢量地图"
+          >
+            <defs>
+              <pattern id="map-grid" width="40" height="40" patternUnits="userSpaceOnUse">
+                <path d="M40 0H0V40" fill="none" stroke="#DDE4E5" strokeWidth="0.7" />
+              </pattern>
+              <filter id="selection-glow" x="-30%" y="-30%" width="160%" height="160%">
+                <feDropShadow dx="0" dy="0" stdDeviation="3" floodColor="#113C45" floodOpacity="0.48" />
+              </filter>
+            </defs>
+            <rect width="1000" height="1000" fill="#F3F5F2" />
+            <rect width="1000" height="1000" fill="url(#map-grid)" opacity="0.7" />
+
+            <g className="unit-backdrop">
+              {data.units.map((unit) => (
+                <path key={`back-${unit.id}`} d={unit.path} />
+              ))}
+            </g>
+
+            {mode === "unit" && (
+              <g className="unit-features">
+                {data.units.map((unit, index) => {
+                  const selected = selection?.kind === "unit" && selection.id === unit.id;
+                  const [left, top, right, bottom] = unit.bbox;
+                  return (
+                    <g key={unit.id}>
+                      <path
+                        d={unit.path}
+                        className={selected ? "selected" : ""}
+                        style={{ "--unit-fill": LAND_USE_COLORS[index % LAND_USE_COLORS.length] } as CSSProperties}
+                        onClick={() => {
+                          if (didDragRef.current) {
+                            didDragRef.current = false;
+                            return;
+                          }
+                          choose("unit", unit);
+                        }}
+                      />
+                      {(viewBox.width < 620 || selected) && (
+                        <text x={(left + right) / 2} y={(top + bottom) / 2} className={selected ? "selected-label" : ""}>
+                          {unit.businessId}
+                        </text>
+                      )}
+                    </g>
+                  );
+                })}
+              </g>
+            )}
+
+            {mode === "parcel" && (
+              <g className="parcel-features">
+                {data.parcels.map((parcel) => {
+                  const selected = selection?.kind === "parcel" && selection.id === parcel.id;
+                  return (
+                    <path
+                      key={parcel.id}
+                      d={parcel.path}
+                      className={selected ? "selected" : ""}
+                      fill={hashColor(parcel.landUseCode || parcel.landUse)}
+                      onClick={() => {
+                        if (didDragRef.current) {
+                          didDragRef.current = false;
+                          return;
+                        }
+                        choose("parcel", parcel);
+                      }}
+                    />
+                  );
+                })}
+              </g>
+            )}
+
+            <g className="control-features" aria-hidden="true">
+              {data.controls
+                .filter((control) => visibleLayers.includes(control.layerKey))
+                .map((control) => {
+                  const layer = data.layers.find((item) => item.key === control.layerKey);
+                  return (
+                    <path
+                      key={control.id}
+                      d={control.path}
+                      className={applicableIds.has(control.id) ? "applicable" : ""}
+                      style={{ "--control-color": layer?.color ?? "#5A6B70" } as CSSProperties}
+                    />
+                  );
+                })}
+            </g>
+          </svg>
+
+          <div className="map-tools" aria-label="地图缩放工具">
+            <button type="button" onClick={() => zoomBy(0.78)} aria-label="放大">＋</button>
+            <button type="button" onClick={() => zoomBy(1.28)} aria-label="缩小">−</button>
+            <button type="button" onClick={() => setViewBox(DEFAULT_VIEW)} aria-label="复位">⌂</button>
+          </div>
 
           <div className="map-legend">
-            <div className="road-legend">
-              <span>道路等级</span>
-              {(["快速路", "主干路", "次干路", "支路"] as RoadClass[]).map((roadClass) => (
-                <i key={roadClass} className={`legend-${roadClass}`}>{roadClass}</i>
-              ))}
-              <i className="legend-transit">轨道交通</i>
-            </div>
-            <div className="landuse-legend">
-              <span>用地底色</span>
-              {Object.entries(landUseColors).map(([name, color]) => (
-                <i key={name}><b style={{ background: color }} />{name}</i>
-              ))}
-            </div>
-            <p>总览显示本层全部标准要素；选中要素以高饱和描边和白色光晕增强，未选图层仍保留。刚性、弹性、引导与研究对象按不同线型表达。</p>
+            <span><i className="legend-unit" />单元边界</span>
+            <span><i className="legend-parcel" />地块边界</span>
+            <span><i className="legend-control" />管控范围</span>
+          </div>
+
+          <div className="map-footnote">
+            <span>数据范围：西安市东部</span>
+            <span>{data.meta.coordinateNotice}</span>
           </div>
         </section>
 
-        <ControlInspector
-          level={level}
-          rows={controlRows}
-          selectedId={selectedItem?.id ?? null}
-          spatialSelection={spatialSelection}
-          selectedParcel={selectedParcel}
-          selectItem={selectItem}
-        />
+        <aside className="right-panel">
+          {selectedObject && selection ? (
+            <>
+              <div className="object-header">
+                <div className="object-kicker">
+                  <span>{selection.kind === "unit" ? "详细规划编制单元" : "规划地块"}</span>
+                  <button type="button" onClick={() => window.print()}>打印结果</button>
+                </div>
+                <h2>{selection.kind === "unit" ? (selectedObject as UnitItem).name : selectedObject.businessId}</h2>
+                <p>{selection.kind === "unit" ? selectedObject.businessId : `${(selectedObject as ParcelItem).unitId} · ${(selectedObject as ParcelItem).landUse}`}</p>
+              </div>
+
+              {selection.kind === "unit" ? (
+                <div className="attribute-card">
+                  <div><span>单元面积</span><strong>{(selectedObject as UnitItem).areaHa} ha</strong></div>
+                  <div><span>开发类型</span><strong>{(selectedObject as UnitItem).development || "—"}</strong></div>
+                  <div><span>规划人口</span><strong>{(selectedObject as UnitItem).population || "—"}</strong></div>
+                  <div className="wide"><span>主导功能</span><p>{(selectedObject as UnitItem).function || "暂无"}</p></div>
+                </div>
+              ) : (
+                <div className="attribute-card">
+                  <div><span>用地面积</span><strong>{(selectedObject as ParcelItem).areaHa} ha</strong></div>
+                  <div><span>用地性质</span><strong>{(selectedObject as ParcelItem).landUse}</strong></div>
+                  <div><span>容积率下限</span><strong>{(selectedObject as ParcelItem).farMin || "—"}</strong></div>
+                  <div><span>容积率上限</span><strong>{(selectedObject as ParcelItem).farMax || "—"}</strong></div>
+                  <div className="wide"><span>所属单元</span><p>{unitMap.get((selectedObject as ParcelItem).unitId)?.name ?? (selectedObject as ParcelItem).unitId}</p></div>
+                </div>
+              )}
+
+              <div className="rule-heading">
+                <div>
+                  <span className="eyebrow">空间叠加结果</span>
+                  <h3>涉及的城市设计管控</h3>
+                </div>
+                <strong>{applicableControls.length}</strong>
+              </div>
+
+              <div className="rule-list">
+                {applicableControls.length ? applicableControls.map(({ control, relationship }) => {
+                  const layer = data.layers.find((item) => item.key === control.layerKey);
+                  return (
+                    <article className="rule-card" key={control.id} style={{ "--rule-color": layer?.color ?? "#607176" } as CSSProperties}>
+                      <div className="rule-card-top">
+                        <span className="rule-layer">{control.layer}</span>
+                        <span className={`source-badge ${control.ruleSource === "PDF补充" ? "pdf" : ""}`}>{control.ruleSource}</span>
+                      </div>
+                      <h4>{control.title}</h4>
+                      <div className="rule-tags">
+                        {control.level && <span>{control.level}</span>}
+                        {control.subtype && <span>{control.subtype}</span>}
+                        {!control.subtype && control.type && control.type !== control.title && <span>{control.type}</span>}
+                        <span className="overlap-tag">{overlapLabel(relationship.overlap)}</span>
+                      </div>
+                      <p>{control.rule}</p>
+                      {control.range && (
+                        <details>
+                          <summary>查看原始管控范围说明</summary>
+                          <p>{control.range}</p>
+                        </details>
+                      )}
+                      <button
+                        type="button"
+                        className="locate-button"
+                        onClick={() => {
+                          if (!visibleLayers.includes(control.layerKey)) toggleLayer(control.layerKey);
+                          zoomTo(control.bbox);
+                        }}
+                      >定位管控范围 ↗</button>
+                    </article>
+                  );
+                }) : (
+                  <div className="empty-rules">
+                    <div>○</div>
+                    <h4>未涉及现有管控矢量</h4>
+                    <p>该对象与城市设计管控数据GDB中的现有要素没有实质面积相交。</p>
+                  </div>
+                )}
+              </div>
+            </>
+          ) : (
+            <div className="empty-selection"><p>请在地图上选择一个单元或地块</p></div>
+          )}
+        </aside>
       </section>
-
-      <ScaleLadder item={selectedItem ?? items[0]} level={level} setLevel={chooseLevel} />
-
-      <section className="lower-grid">
-        <StrategyLibrary />
-        <QualityGate />
-      </section>
-
-      <footer>
-        <span>依据：《西安市国土空间详细规划城市设计编审入库工作说明》第二章及附件要素目录</span>
-        <span>演示数据仅用于MVP验证 · 不替代法定规划成果</span>
-      </footer>
     </main>
   );
 }
