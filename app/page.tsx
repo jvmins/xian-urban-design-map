@@ -2,8 +2,10 @@
 
 import {
   type CSSProperties,
+  type FormEvent,
   type PointerEvent as ReactPointerEvent,
   type WheelEvent as ReactWheelEvent,
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -87,6 +89,8 @@ type Selection = { kind: "unit" | "parcel"; id: string } | null;
 type ViewBox = { x: number; y: number; width: number; height: number };
 
 const DEFAULT_VIEW: ViewBox = { x: 0, y: 0, width: 1000, height: 1000 };
+const AUTH_CREDENTIAL = "GHSS";
+const AUTH_SESSION_KEY = "urban-design-ghss-authenticated";
 const UNIT_COLORS = [
   "#DCE7ED",
   "#E8DDD0",
@@ -132,6 +136,10 @@ function viewForBBox(bbox: BBox): ViewBox {
 
 export default function UrbanDesignMap() {
   const data = mapDataPayload as MapData;
+  const [authenticated, setAuthenticated] = useState(false);
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [loginError, setLoginError] = useState("");
   const [mode, setMode] = useState<"unit" | "parcel">("unit");
   const [selection, setSelection] = useState<Selection>(null);
   const [query, setQuery] = useState("");
@@ -146,6 +154,12 @@ export default function UrbanDesignMap() {
     feature: { kind: "unit" | "parcel"; id: string } | null;
   } | null>(null);
   const didDragRef = useRef(false);
+
+  useEffect(() => {
+    if (window.sessionStorage.getItem(AUTH_SESSION_KEY) === "true") {
+      setAuthenticated(true);
+    }
+  }, []);
 
   const unitMap = useMemo(
     () => new Map(data.units.map((unit) => [unit.businessId, unit])),
@@ -299,6 +313,72 @@ export default function UrbanDesignMap() {
     }
   }
 
+  function handleLogin(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (username.trim() === AUTH_CREDENTIAL && password === AUTH_CREDENTIAL) {
+      window.sessionStorage.setItem(AUTH_SESSION_KEY, "true");
+      setAuthenticated(true);
+      setPassword("");
+      setLoginError("");
+      return;
+    }
+    setLoginError("账号或密码错误，请重新输入");
+  }
+
+  function handleLogout() {
+    window.sessionStorage.removeItem(AUTH_SESSION_KEY);
+    setAuthenticated(false);
+    setUsername("");
+    setPassword("");
+    setLoginError("");
+  }
+
+  if (!authenticated) {
+    return (
+      <main className="login-shell">
+        <section className="login-card" aria-labelledby="login-title">
+          <div className="login-seal" aria-hidden="true">城</div>
+          <p className="login-eyebrow">URBAN DESIGN CONTROL PLATFORM</p>
+          <h1 id="login-title">东部城市设计一张图</h1>
+          <p className="login-subtitle">城市设计管控信息平台</p>
+          <form className="login-form" onSubmit={handleLogin}>
+            <label htmlFor="login-username">账号</label>
+            <input
+              id="login-username"
+              name="username"
+              value={username}
+              onChange={(event) => {
+                setUsername(event.target.value);
+                setLoginError("");
+              }}
+              autoComplete="username"
+              autoFocus
+              required
+            />
+            <label htmlFor="login-password">密码</label>
+            <input
+              id="login-password"
+              name="password"
+              type="password"
+              value={password}
+              onChange={(event) => {
+                setPassword(event.target.value);
+                setLoginError("");
+              }}
+              autoComplete="current-password"
+              required
+            />
+            <p className={`login-error${loginError ? " visible" : ""}`} role="alert">
+              {loginError || "请输入平台访问凭据"}
+            </p>
+            <button type="submit">进入一张图平台</button>
+          </form>
+          <p className="login-footnote">西安市东部城市设计 · 访问验证</p>
+        </section>
+      </main>
+    );
+  }
+
   return (
     <main className="app-shell">
       <header className="topbar">
@@ -321,6 +401,7 @@ export default function UrbanDesignMap() {
           <span><strong>{data.meta.unitCount}</strong> 个单元</span>
           <span><strong>{formatNumber(data.meta.parcelCount)}</strong> 个地块</span>
           <span><strong>{data.meta.controlCount}</strong> 条规则</span>
+          <button type="button" className="logout-button" onClick={handleLogout}>退出</button>
         </div>
       </header>
 

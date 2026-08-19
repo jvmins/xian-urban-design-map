@@ -87,3 +87,13 @@ test("uses the supplied ArcGIS land-use palette instead of hashed colors", async
     assert.match(palette, new RegExp(color));
   }
 });
+
+test("requires the configured GHSS account before showing the platform", async () => {
+  const page = await source("app/page.tsx");
+  assert.match(page, /const AUTH_CREDENTIAL = "GHSS"/);
+  assert.match(page, /if \(!authenticated\)/);
+  assert.match(page, /handleLogin/);
+  assert.match(page, /type="password"/);
+  assert.match(page, /进入一张图平台/);
+  assert.match(page, /sessionStorage/);
+});
