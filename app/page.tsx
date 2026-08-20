@@ -12,7 +12,12 @@ import {
 } from "react";
 import mapDataPayload from "./map-data.json";
 import { LAND_USE_LEGEND, landUseColor } from "./land-use-palette";
-import { deriveParcelRules, parcelAreaBand } from "./parcel-rules";
+import { parcelAreaBand } from "./parcel-rules";
+import {
+  getUnit20ParcelRequirementGroups,
+  UNIT20_BUSINESS_ID,
+  UNIT20_UNIT_REQUIREMENT_GROUPS,
+} from "./unit20-controls";
 
 type Relationship = { id: string; overlap: number };
 type BBox = [number, number, number, number];
@@ -106,12 +111,6 @@ function formatNumber(value: number) {
   return new Intl.NumberFormat("zh-CN").format(value);
 }
 
-function overlapLabel(value: number) {
-  if (value >= 99.9) return "完整覆盖";
-  if (value < 0.1) return "覆盖不足 0.1%";
-  return `覆盖 ${value.toFixed(value < 10 ? 1 : 0)}%`;
-}
-
 function clampView(next: ViewBox): ViewBox {
   const width = Math.min(1000, Math.max(120, next.width));
   const height = Math.min(1000, Math.max(120, next.height));
@@ -156,17 +155,16 @@ export default function UrbanDesignMap() {
   const didDragRef = useRef(false);
 
   useEffect(() => {
-    if (window.sessionStorage.getItem(AUTH_SESSION_KEY) === "true") {
-      setAuthenticated(true);
-    }
+    const storedAuthentication = window.sessionStorage.getItem(AUTH_SESSION_KEY) === "true";
+    const restoreAuthentication = window.setTimeout(
+      () => setAuthenticated(storedAuthentication),
+      0,
+    );
+    return () => window.clearTimeout(restoreAuthentication);
   }, []);
 
   const unitMap = useMemo(
     () => new Map(data.units.map((unit) => [unit.businessId, unit])),
-    [data],
-  );
-  const controlMap = useMemo(
-    () => new Map(data.controls.map((control) => [control.id, control])),
     [data],
   );
 
@@ -177,21 +175,20 @@ export default function UrbanDesignMap() {
       : data.parcels.find((parcel) => parcel.id === selection.id) ?? null;
   }, [data, selection]);
 
-  const applicableControls = useMemo(() => {
-    if (!selectedObject || selection?.kind !== "unit") return [];
-    return selectedObject.controls
-      .map((relationship) => ({
-        relationship,
-        control: controlMap.get(relationship.id),
-      }))
-      .filter((item): item is { relationship: Relationship; control: ControlItem } => Boolean(item.control))
-      .sort((a, b) => a.control.layer.localeCompare(b.control.layer, "zh-CN"));
-  }, [selectedObject, controlMap, selection]);
+  const requirementGroups = useMemo(() => {
+    if (!selectedObject || !selection) return [];
+    if (selection.kind === "unit") {
+      return (selectedObject as UnitItem).businessId === UNIT20_BUSINESS_ID
+        ? UNIT20_UNIT_REQUIREMENT_GROUPS
+        : [];
+    }
+    return getUnit20ParcelRequirementGroups(selectedObject as ParcelItem);
+  }, [selectedObject, selection]);
 
-  const parcelRules = useMemo(() => {
-    if (!selectedObject || selection?.kind !== "parcel") return [];
-    return deriveParcelRules(selectedObject as ParcelItem, controlMap);
-  }, [selectedObject, controlMap, selection]);
+  const requirementCount = useMemo(
+    () => requirementGroups.reduce((total, group) => total + group.items.length, 0),
+    [requirementGroups],
+  );
 
   const searchResults = useMemo(() => {
     if (query.trim().length < 1) return [];
@@ -626,7 +623,10 @@ export default function UrbanDesignMap() {
             <>
               <div className="object-header">
                 <div>
-                  <span>{selection.kind === "unit" ? "单元详细管控" : "地块详细管控"}</span>
+                  <span>
+                    {selection.kind === "unit" ? "单元详细管控" : "地块详细管控"}
+                    {requirementGroups.length ? " · 20单元示例" : " · 仅作空间展示"}
+                  </span>
                   <h2>{selection.kind === "unit" ? (selectedObject as UnitItem).name : selectedObject.businessId}</h2>
                 </div>
                 <button type="button" onClick={() => setSelection(null)} aria-label="关闭详情">×</button>
@@ -666,56 +666,66 @@ export default function UrbanDesignMap() {
 
                 <div className="table-section-title control-title">
                   <span>02</span>
-                  <strong>{selection.kind === "unit" ? "单元城市设计管控内容" : "地块城市设计管控内容"}</strong>
-                  <b>{selection.kind === "unit" ? applicableControls.length : parcelRules.length}</b>
+                  <strong>{selection.kind === "unit" ? "单元城市设计三级管控要求" : "地块城市设计三级管控要求"}</strong>
+                  <b>{requirementCount}</b>
                 </div>
 
-                <div className="rule-list table-rule-list">
-                  <table className="control-table">
-                    <thead>
-                      <tr><th>序号</th><th>管控事项</th><th>适用条件</th><th>控制内容</th></tr>
-                    </thead>
-                    <tbody>
-                      {selection.kind === "unit" ? (
-                        applicableControls.length ? applicableControls.map(({ control, relationship }, index) => (
-                          <tr key={control.id}>
-                            <td>{String(index + 1).padStart(2, "0")}</td>
-                            <td>
-                              <strong>{control.title}</strong>
-                              <small>{control.layer}{control.level ? ` · ${control.level}` : ""}</small>
-                            </td>
-                            <td>
-                              <span>{overlapLabel(relationship.overlap)}</span>
-                              {control.subtype && <small>{control.subtype}</small>}
-                            </td>
-                            <td>
-                              <p>{control.rule}</p>
-                              <small className="result-source">{control.ruleSource}</small>
-                            </td>
-                          </tr>
-                        )) : (
-                          <tr className="empty-table-row"><td colSpan={4}>该单元当前未匹配到城市设计管控规则。</td></tr>
-                        )
-                      ) : parcelRules.length ? parcelRules.map((rule, index) => (
-                        <tr key={rule.id} data-rule-origin="guide-derived">
-                          <td>{String(index + 1).padStart(2, "0")}</td>
-                          <td><strong>{rule.element}</strong><small>{rule.group}</small></td>
-                          <td><span className={`table-strength strength-${rule.strength}`}>{rule.strength}</span><small>{rule.trigger}</small></td>
-                          <td><p>{rule.requirement}</p><small className="rule-provenance">依据：{rule.provenance}</small></td>
-                        </tr>
-                      )) : (
-                        <tr className="empty-table-row"><td colSpan={4}>该地块当前没有可计算的城市设计管控要求。</td></tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
+                {requirementGroups.length ? (
+                  <div className="tiered-requirements">
+                    {requirementGroups.map((group, groupIndex) => (
+                      <section className={`requirement-tier tier-${group.id}`} key={group.id}>
+                        <header className="tier-header">
+                          <div>
+                            <span>{String(groupIndex + 1).padStart(2, "0")} · {group.level}</span>
+                            <h3>{group.level}—{group.source}</h3>
+                          </div>
+                          <b>{group.sourceType}</b>
+                        </header>
+                        <div className="tier-origin">
+                          <strong>管控原由</strong>
+                          <p>{group.origin}</p>
+                        </div>
+                        <div className="rule-list table-rule-list">
+                          <table className="control-table tier-control-table">
+                            <thead>
+                              <tr><th>序号</th><th>管控事项</th><th>管控原由</th><th>控制内容</th></tr>
+                            </thead>
+                            <tbody>
+                              {group.items.map((rule, index) => (
+                                <tr key={rule.id} data-rule-origin="three-level-derived">
+                                  <td>{String(index + 1).padStart(2, "0")}</td>
+                                  <td><strong>{rule.element}</strong><small>{group.level}</small></td>
+                                  <td>
+                                    <span className={`requirement-status status-${rule.applicability}`}>{rule.applicability}</span>
+                                    <p>{rule.reason}</p>
+                                    <small>触发：{rule.trigger}</small>
+                                  </td>
+                                  <td><p>{rule.content}</p></td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </section>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="unavailable-detail">
+                    <span>本轮仅作空间展示</span>
+                    <h3>暂未录入详细城市设计内容</h3>
+                    <p>
+                      当前一张图以DB-CBG-20单元及其内部地块作为三级管控示例，
+                      该对象保留轮廓、编号和基本信息，不展示具体管控要求。
+                    </p>
+                  </div>
+                )}
               </div>
             </>
           ) : (
             <div className="empty-selection">
               <div className="selection-mark">⌖</div>
               <h3>{mode === "unit" ? "点击地图中的单元" : "点击地图中的地块"}</h3>
-              <p>{mode === "unit" ? "右侧将立即列出该单元涉及的城市设计管控结果。" : "右侧将结合用地、面积和空间命中关系生成地块级管控要求。"}</p>
+              <p>{mode === "unit" ? "DB-CBG-20显示片区、单元、板块三级要求，其余单元仅展示基本信息。" : "20单元内地块按用地和空间命中关系显示三级传导要求，其余地块仅展示基本信息。"}</p>
             </div>
           )}
         </aside>

@@ -33,15 +33,17 @@ test("keeps controls at unit level while parcels have no direct requirements", a
   assert.ok(payload.parcels.some((parcel) => parcel.contextControls.length > 0));
 });
 
-test("decomposes direct parcel context instead of copying parent unit controls", async () => {
+test("decomposes the DB-CBG-20 parcel context instead of copying parent unit controls", async () => {
   const page = await source("app/page.tsx");
-  const rules = await source("app/parcel-rules.ts");
+  const rules = await source("app/unit20-controls.ts");
   assert.doesNotMatch(page, /unitMap\.get\(\(selectedObject as ParcelItem\)\.unitId\)\?\.controls/);
-  assert.match(page, /deriveParcelRules/);
-  assert.match(page, /data-rule-origin="guide-derived"/);
+  assert.match(page, /getUnit20ParcelRequirementGroups/);
+  assert.match(page, /data-rule-origin="three-level-derived"/);
   assert.match(rules, /parcel\.contextControls/);
-  assert.match(rules, /keyZoneStrengths/);
-  assert.match(page, /地块城市设计管控内容/);
+  for (const controlId of ["c2-7", "c3-38", "c3-45", "c3-78"]) {
+    assert.match(rules, new RegExp(controlId));
+  }
+  assert.match(page, /地块城市设计三级管控要求/);
 });
 
 test("marks supplemented rules and keeps source-data rules", async () => {
@@ -59,7 +61,8 @@ test("exposes unit, parcel, layer, search and spatial-inspector interactions", a
     "城市设计管控",
     "handleWheel",
     "handlePointerMove",
-    "applicableControls",
+    "requirementGroups",
+    "管控原由",
     "控制内容",
   ]) {
     assert.match(page, new RegExp(token));
@@ -70,9 +73,9 @@ test("uses a floating table result panel without control-vector overlays", async
   const page = await source("app/page.tsx");
   assert.match(page, /数据图层/);
   assert.match(page, /对象基本信息/);
-  assert.match(page, /单元城市设计管控内容/);
-  assert.match(page, /地块城市设计管控内容/);
-  assert.match(page, /className="control-table"/);
+  assert.match(page, /单元城市设计三级管控要求/);
+  assert.match(page, /地块城市设计三级管控要求/);
+  assert.match(page, /className="control-table tier-control-table"/);
   assert.doesNotMatch(page, /control-features/);
   assert.doesNotMatch(page, /现有矢量/);
 });
@@ -96,4 +99,31 @@ test("requires the configured GHSS account before showing the platform", async (
   assert.match(page, /type="password"/);
   assert.match(page, /进入一张图平台/);
   assert.match(page, /sessionStorage/);
+});
+
+test("uses DB-CBG-20 as the only detailed three-level demonstration", async () => {
+  const page = await source("app/page.tsx");
+  const rules = await source("app/unit20-controls.ts");
+  assert.match(rules, /UNIT20_BUSINESS_ID = "DB-CBG-20"/);
+  assert.match(page, /暂未录入详细城市设计内容/);
+  assert.match(page, /其余单元仅展示基本信息/);
+  for (const level of ["片区层面", "单元层面", "板块层面"]) {
+    assert.match(rules, new RegExp(level));
+  }
+});
+
+test("names every level by its source and records the control origin", async () => {
+  const rules = await source("app/unit20-controls.ts");
+  for (const sourceName of [
+    "《西安市灞河重点区域风貌管控条例》",
+    "《西安市国土空间规划城市设计导则》",
+    "《东部城市设计·奥体核心板块城市设计指引》",
+  ]) {
+    assert.match(rules, new RegExp(sourceName));
+  }
+  assert.match(rules, /origin:/);
+  assert.match(rules, /reason:/);
+  assert.match(rules, /170米/);
+  assert.match(rules, /不大于160米/);
+  assert.match(rules, /不小于30米/);
 });
